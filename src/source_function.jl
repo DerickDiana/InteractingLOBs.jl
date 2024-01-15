@@ -1,38 +1,22 @@
 # -*- coding: utf-8 -*-
-mutable struct SourceTerm
-    λ::Float64
-    μ::Float64
-    do_source::Bool
-end
-
-
 # +
-function (st::SourceTerm)(D,
-                                 slob_num, t)
+function source_function(D::Dict{Int64, DataPasser},
+                                 slob_num::Int64, t::Int64; t_current::Int64=-1)
     
-    #slob¹ = slobs[slob_num]
-    #p_list¹ = raw_price_paths[slob_num,:,path_num]
-    #φ_list¹ = lob_densities[slob_num,:,:,path_num]
-    #slob² = slobs[2+(1-slob_num)]
-    #p_list² = raw_price_paths[2+(1-slob_num),:,path_num]
-    #φ_list² = lob_densities[2+(1-slob_num),:,:,path_num]
-    
-    # extract most recent prices
-    #p¹ = p_list¹[t-1]
-    #p² = p_list²[t-1]
+    st = D[slob_num].slob.source_term
     
     if !(st.do_source)
-        temp = [0 for _ in D[slob_num].slob.x]
-        return temp
+        return D[slob_num].slob.zero_vec #NB passes by sharing
     end
     
     p¹ = D[slob_num].raw_price_paths[t-1]
     
     f(y)=-st.λ*st.μ*y*exp(-(st.μ*(y))^2) #y is a temporary variable
+    #f(y)=-10*sign(y) #y is a temporary variable
+    #f(y) = -st.λ*tanh(st.μ*(y))
     
-    return [f(xᵢ¹-p¹) for xᵢ¹ in D[slob_num].slob.x]
+    width = D[slob_num].slob.L
     
-    #f(y)=-st.λ*(st.μ*(y))*exp(-(st.μ*(y))^2) #y is a temporary variable
-    #return f(x-p¹)
+    return [f(  mod(  xᵢ¹ - p¹ - width/2  , width  )  -  width/2  ) for xᵢ¹ in D[slob_num].slob.x]
     
 end

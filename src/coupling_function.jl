@@ -1,29 +1,16 @@
 # -*- coding: utf-8 -*-
-mutable struct CouplingTerm
-    μ::Float64
-    a::Float64
-    b::Float64
-    c::Float64
-    do_coupling::Bool
-end
-
 function CouplingTerm(μ::Float64, a::Float64, b::Float64, c::Float64)
     return CouplingTerm(μ, a, b, c, true)
 end
 
 # +
-function (it::CouplingTerm)(D,
-                                 slob_num, t)
+function coupling_function(D::Dict{Int64, DataPasser},
+                                 slob_num::Int64, t::Int64; t_current::Int64=-1)
     
-    #slob¹ = slobs[slob_num]
-    #p_list¹ = raw_price_paths[slob_num,:,path_num]
-    #φ_list¹ = lob_densities[slob_num,:,:,path_num]
-    #slob² = slobs[2+(1-slob_num)]
-    #p_list² = raw_price_paths[2+(1-slob_num),:,path_num]
-    #φ_list² = lob_densities[2+(1-slob_num),:,:,path_num]
-    
-    if (!(it.do_coupling))
-        return [0 for xᵢ¹ in D[slob_num].slob.x] #for zero coupling
+    it = D[slob_num].slob.coupling_term
+    if (!(it.do_coupling) || it.b==0.0)
+        #return D[slob_num].slob.zero_vec #NB passes by sharing
+        return D[slob_num].slob.x .* 0 #NB passes by sharing
     end
     
     
@@ -56,8 +43,3 @@ function (it::CouplingTerm)(D,
     coupling¹ = [coupling_inner(xᵢ¹, p¹, p², t) for xᵢ¹ in D[slob_num].slob.x]
     
 end
-# -
-
-
-
-

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # +
-function initial_conditions_numerical(D, 
-                                        t, slob_num, V₀=0)
+function initial_conditions_numerical(D::Dict{Int64, DataPasser}, 
+                                        t::Int64, slob_num::Int64, V₀::Float64=0.0)::Nothing
     slob¹ = D[slob_num].slob
     #slob² = D[2+(1-slob_num)].slob
     
@@ -10,21 +10,21 @@ function initial_conditions_numerical(D,
     end# ?????????????????????????????????????????????????/
     
     # eq 36:
-    ud = (-V₀/(2.0*slob¹.Δx) + slob¹.D/(slob¹.Δx^2)) * ones(Float64, slob¹.M)#upper diagonal
-    md = ((-2.0*slob¹.D)/(slob¹.Δx^2) - slob¹.nu) * ones(Float64, slob¹.M+1) #middle diagonal
-    ld = (V₀/(2.0*slob¹.Δx) + slob¹.D/(slob¹.Δx^2)) * ones(Float64, slob¹.M) #lower diagonal
+    ud = (-V₀/(2.0*slob¹.Δx) + slob¹.D/(slob¹.Δx^2)) * ones(Float64, slob¹.M)  #upper diagonal
+    md = ((-2.0*slob¹.D)/(slob¹.Δx^2) - slob¹.nu) * ones(Float64, slob¹.M+1)   #middle diagonal
+    ld = (V₀/(2.0*slob¹.Δx) + slob¹.D/(slob¹.Δx^2)) * ones(Float64, slob¹.M)   #lower diagonal
     A = Tridiagonal(ld, md, ud)
 
     A[1,2] = 2*slob¹.D/(slob¹.Δx^2)
     A[end, end-1] = 2*slob¹.D/(slob¹.Δx^2)
     
-    source   = slob¹.source_term(   D,
+    source   = source_function(   D,
                                     slob_num, t) 
 
-    coupling = slob¹.coupling_term( D,
+    coupling = coupling_function( D,
                                     slob_num, t) 
 
-    rl_push  = slob¹.rl_push_term(  D,
+    rl_push  = rl_push_function(  D,
                                     slob_num, t) 
     
     B = .-(source.+coupling.+rl_push)#B is s in (37)
@@ -37,93 +37,177 @@ function initial_conditions_numerical(D,
     end
     
     D[slob_num].lob_densities[:,t] = φ
+    
+    if slob¹.do_exp_dist_times
+        D[slob_num].lob_densities_L[:,t] = change_side(φ,1 ,-1)
+        D[slob_num].lob_densities_R[:,t] = change_side(φ,-1, 1)
+    else
+        D[slob_num].lob_densities_L[:,t] = φ
+        D[slob_num].lob_densities_R[:,t] = φ
+    end
+    
     D[slob_num].sources[:,t]       = source
     D[slob_num].couplings[:,t]     = coupling
     D[slob_num].rl_pushes[:,t]     = rl_push
     D[slob_num].V[t]               = V₀
     
+    #D[slob_num].RLBrains[t]        =  ?Already initialised correctly?
+    #D[slob_num].RLViews[t]          = RLView([1.0,1.0],0.0)
+    c = D[slob_num].RLParam.c
+    len = length(c)
+    D[slob_num].RLViews[t]         = RLView([1.0,1.0],0.0)
+    D[slob_num].RLViews[t-1]         = RLView([1.0,1.0],0.0)
+    D[slob_num].RLBrains[t]        =    ContinuousLearning.copy_brain(D[slob_num].RLParam.init_brain) #ContinuousLearning.make_brain(len)
+    D[slob_num].RLBrains[t-1]        = ContinuousLearning.copy_brain(D[slob_num].RLParam.init_brain) #ContinuousLearning.make_brain(len)
+    
     #give x such that A*x = B
     #return φ, source, coupling, rl_push, V₀
+    return nothing
     
 end
-# -
 
-function extract_mid_price_index(slob,lob_density)
-    mid_price_ind = 2
+# +
+function extract_mid_price_index_efficient(slob::SLOB,lob_density::Vector{Float64},previous_pos::Int64)::Int64
+    if previous_pos < 0
+        return -1
+    end
+    
+    #l = slob.M+1
     l = length(lob_density)
-    #while (mid_price_ind<l)&&((lob_density[mid_price_ind] > 0) || (lob_density[mid_price_ind+1]>lob_density[mid_price_ind]))
-    while ((mid_price_ind<l)&&(lob_density[mid_price_ind] > 0))
-        mid_price_ind += 1
-    end #scan array in x looking for cross over point of the mid price
-    if ( mid_price_ind==l || mid_price_ind==2 ) 
-        return -1
-    end
-    return mid_price_ind
-end
-
-function extract_mid_price(slob, lob_density)
-    mid_price_ind = extract_mid_price_index(slob,lob_density)
-    if mid_price_ind == -1
-        return -1
+    
+    #    1  ...   _     _     _     _   previous_pos     _    _    _    ... l
+    #    1  ...   _     _     _   left     right         _    _    _    ... l
+    
+    left_ = previous_pos - 1 
+    right_ = previous_pos 
+    
+    if sign( lob_density[left_] ) * sign( lob_density[right_] ) < 0.0
+        return right_
     end
     
-    y1 = lob_density[mid_price_ind-1]#y value (density) to the left
-    y2 = lob_density[mid_price_ind]#y value (density) to the right
-    x1 = slob.x[mid_price_ind-1]#x value value to the left
+    while (left_ > 1) && (right_ < l)
+        
+        if (sign( lob_density[left_] ) * sign( lob_density[left_ - 1] ) < 0.0)  
+            return left_
+        end
+        
+        if (sign( lob_density[right_] ) * sign( lob_density[right_ + 1] ) < 0.0) 
+            return right_ + 1
+        end
+        
+        if ((lob_density[left_] == 0.0) && (sign(lob_density[left_ - 1]) * sign(lob_density[left_ + 1]) < 0.0)) 
+            return left_
+        end
+        
+        if ((lob_density[right_] == 0.0) && (sign(lob_density[right_ - 1]) * sign(lob_density[right_ + 1]) < 0.0)) 
+            return right_
+        end
+                
+        
+        left_  -= 1
+        right_ += 1
+        
+    end 
+        
+        
+#     # only do for cyclic boundary coditions
+#     if (sign( lob_density[1] ) * sign( lob_density[l] ) < 0.0) ||
+#         ((lob_density[1] == 0.0) && (sign(lob_density[l]) * sign(lob_density[2]) < 0.0))  
+        
+#         return 1
+#     end
+        
+#     if ((lob_density[l] == 0.0) && (sign(lob_density[l-1]) * sign(lob_density[1]) < 0.0))
+        
+#         return l
+        
+#     end
+        
+    
+    
+    if left_ == 1           #if we hit the left wall
 
-    mid_price = (-y1 * slob.Δx)/(y2 - y1) + x1 #solution to assuming straight approximation between 
-                                               #left and right point (did the math) (see page 20)
-    return mid_price
+        curr_right_ = right_
+        right_ = l
+            
+        while (right_ >= curr_right_)
+
+            right_ -= 1
+            
+            if (sign( lob_density[right_] ) * sign( lob_density[right_ + 1] ) < 0.0) 
+                return right_ + 1
+            end
+
+            if ((lob_density[right_] == 0.0) && (sign(lob_density[right_ - 1]) * sign(lob_density[right_ + 1]) < 0.0))  
+                return right_
+            end
+                
+            
+
+        end
+
+
+    else# right_ == l+1           we must have hit the right wall
+
+        curr_left_ = left_
+        left_ = 0
+        while (left_ <= curr_left_)
+
+            left_ += 1
+
+            if (sign( lob_density[left_] ) * sign( lob_density[left_ - 1] ) < 0.0)  
+                return left_
+            end
+            
+            if ((lob_density[left_] == 0.0) && (sign(lob_density[left_ - 1]) * sign(lob_density[left_ + 1]) < 0.0))  
+                return left_
+            end
+
+        end
+    end
+   
+    return -1
 end
-
-
-# +
-using Interpolations
-using Plots
-
-x = 1.0:1.0:10.0
-#y = @. cos(x^2 / 9.0)
-y = [1.0 for xi in x]
-y[3] = 10.0
-
-A = hcat(x,y)
-
-# +
-itps = Array{AbstractInterpolation}(undef,0)
-xs = Array{Vector{Float64}}(undef,0)
-ys = Array{Vector{Float64}}(undef,0)
-labels = Array{String}(undef,0)
-
-tfine = 1.0:0.1:10.0
-
-push!(itps,Interpolations.scale(interpolate(A, (BSpline(Linear()))), x, 1:2))
-push!(labels,"BSplit Linear Natural On Grid No Interp")
-
-push!(itps,Interpolations.scale(interpolate(A, (BSpline(Quadratic(Natural(OnGrid()))))), x, 1:2))
-push!(labels,"BSplit Quadratic Natural On Grid")
-
-push!(itps,Interpolations.scale(interpolate(A, (BSpline(Cubic(Natural(OnGrid()))))), x, 1:2))
-push!(labels,"BSplit Cubic Natural On Grid")
-
-
-
-for i in 1:length(itps)
-    push!(xs,[itps[i](t,1) for t in tfine])
-    push!(ys,[itps[i](t,2) for t in tfine])
-end 
 # -
 
-scatter(x, y, label="knots")
-for i in 1:length(itps)
-    plot!(xs[i], ys[i], label=labels[i],ls=:dash)
+function extract_mid_price_index(slob::SLOB,lob_density::Vector{Float64},previous_pos::Int64)::Int64
+    return extract_mid_price_index_efficient(slob,lob_density,previous_pos)
 end
-plot!(size=(1100,1100))
 
-function SibuyaKernelDP(n,slob)
+function map_back(index,size)
+    #return mod(index-1,size)+1
+    return index
+end
+
+function my_interpolator(x::StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64},y::Vector{Float64})::AbstractInterpolation
+    A = hcat(x,y)
+    return Interpolations.scale(interpolate(A, (BSpline(Cubic(Natural(OnGrid()))))), x, 1:2)
+end
+
+function auto_interpolator(x::StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64},y::Vector{Float64},x_dense::AbstractRange;check_zeros::Bool=false)::Vector{Float64}
+    if check_zeros
+        if sum(abs.(y))<1e-13
+            return [0.0 for xi in x_dense]
+        end
+    end
+    itp = my_interpolator(x,y)
+    y_func = (t) -> itp(t,2)
+    return [y_func(xi) for xi in x_dense]
+end
+
+function get_interpolated_intercept(x::StepRangeLen{Float64, Base.TwicePrecision{Float64}, Base.TwicePrecision{Float64}, Int64},y::Vector{Float64},left_x_bound::Float64,right_x_bound::Float64)::Float64
+    itp = my_interpolator(x,y)
+    y_func = (t) -> itp(t,2)
+    return find_zero(y_func, (left_x_bound,right_x_bound), Bisection())
+end
+
+function SibuyaKernelDP(n::Int64,slob::SLOB)::Float64
     return slob.SK_DP[n]
 end
 
-function calculate_next_step_original(φ, slob, P, P⁺, P⁻,net_source) #NB, pass in only most recent time
+function calculate_next_step_original(φ::Vector{Float64}, slob::SLOB, P::Float64, P⁺::Float64, P⁻::Float64,net_source::Vector{Float64})::Vector{Float64} #NB, pass in only most recent time
+    #φ = D[slob_num].lob_densities[:,t_current-1]
+    
     ###### LITERALLY Michael's code #####################################
             
     φ₋₁ = φ[1]
@@ -144,139 +228,292 @@ function calculate_next_step_original(φ, slob, P, P⁺, P⁻,net_source) #NB, p
     return φ_next
 end
 
-function calculate_next_step(φ, slob, P, P⁺, P⁻,net_source,
-                                t)
+# +
+function calculate_next_step_no_exp(φ::Matrix{Float64},φ_L::Matrix{Float64},φ_R::Matrix{Float64}, slob::SLOB, P::Float64, P⁺::Float64, P⁻::Float64,net_source,
+                                t::Int64)#::Tuple{Vector{Float64}, Vector{Float64}, Vector{Float64}}
     myend = size(φ,1)
     φ_next = zeros(Float64,myend)
     middle = 2:(myend-1)    #all indices excluding the first and last
     
-    if (slob.old_way)&&(slob.shift==-1)&&(slob.cut_off==1)
-        Pm = P
-        removal_scale = - slob.nu * slob.Δt
-    else
-        Pm = P - 1                                
-        removal_scale = exp( - slob.nu * slob.Δt)
-    end
-
+    Pm = P - 1                                   # becomes ( 1 - r ) - 1 = -r                               
+    
+    removal_scale = exp( - slob.nu * slob.Δt)
+    
+    test_val = 0.0
     for tₘ in max(1,t-slob.cut_off):(t-1)
-
-        front = SibuyaKernelDP(t-tₘ,slob)
-
+      
+        front = SibuyaKernelDP(t-tₘ,slob)*exp(- ((t-tₘ+slob.shift) * slob.Δt) * slob.nu) #shift is usually -1, this option is for legacy reasons
+        
         φ_next[1] += front * 
-            (  P⁺ * φ[1        ,tₘ] +   #1      -1    (but not because boundary)
-               P⁻ * φ[2        ,tₘ] +   #1      +1
-               Pm * φ[1        ,tₘ]  )  #1      +0 
+            (  P⁺ * φ[1          ,tₘ] +   #1      -1    (but not because boundary)
+               P⁻ * φ[2          ,tₘ] +   #1      +1
+               Pm * φ[1          ,tₘ]  )  #1      +0 
 
         φ_next[end] += front * 
-            (  P⁺ * φ[end-1    ,tₘ] +   #end    -1  
-               P⁻ * φ[end      ,tₘ] +   #end    +1    (but not because boundary)
-               Pm * φ[end      ,tₘ]  )  #end    +0
+            (  P⁺ * φ[end-1      ,tₘ] +   #end    -1  
+               P⁻ * φ[end        ,tₘ] +   #end    +1    (but not because boundary)
+               Pm * φ[end        ,tₘ]  )  #end    +0
 
         φ_next[middle] +=  front * 
-            (  P⁺ * φ[middle.-1,tₘ] +   #middle -1
-               P⁻ * φ[middle.+1,tₘ] +   #middle +1 
-               Pm * φ[middle   ,tₘ]  )  #middle +0 
+            (  P⁺ * φ[middle.-1  ,tₘ] +   #middle -1
+               P⁻ * φ[middle.+1  ,tₘ] +   #middle +1 
+               Pm * φ[middle     ,tₘ]  )  #middle +0 
         
+        # the above is a more efficient version of 
+        # φ_next += front * 
+        #    ( P⁺ * change_side(φ[:,tₘ],1,-1) + 
+        #      P⁻ * change_side(φ[:,tₘ],-1,1) + 
+        #      Pm * φ[:,tₘ] )
+            
     end
     
     φ_next += removal_scale * φ[:,t-1] + slob.Δt * net_source
+        
+    return (φ_next,φ_next,φ_next,-1)
     
-    return φ_next
 end
 
 # +
-function intra_time_period_simulate_fractional( D,
-                                                t, slob_num) 
+function calculate_next_step_exp(φ::Matrix{Float64},φ_L::Matrix{Float64},φ_R::Matrix{Float64}, slob::SLOB, P::Float64, P⁺::Float64, P⁻::Float64,net_source,
+                                t::Int64)#::Tuple{Vector{Float64}, Vector{Float64}, Vector{Float64}}
+    myend = size(φ,1)
+    φ_next = zeros(Float64,myend)
+    φ_L_next = zeros(Float64,myend)
+    φ_R_next = zeros(Float64,myend)
+
+    Pm = P - 1                                   # becomes ( 1 - r ) - 1 = -r                               
+    removal_scale = exp( - slob.nu * slob.Δts[t-1])
+
+    #test_val = 0.0
+    for tₘ in max(1,t-slob.cut_off):(t-1)
+        
+        #front = SibuyaKernelDP(t-tₘ,slob)*exp(- (slob.Δts_cum[t+slob.shift] -  slob.Δts_cum[tₘ]) * slob.nu) #shift is usually -1, this option is for legacy reasons
+        front = SibuyaKernelDP(t-tₘ,slob)*exp(- sum(slob.Δts[tₘ:t+slob.shift-1]) * slob.nu) #shift is usually -1, this option is for legacy reasons
+        ##################### NB, could need to be !!!!!!!!!!!!!!!!
+            ##front = SibuyaKernelDP(t-tₘ,slob)*exp(- sum(slob.Δts[(tₘ+1):t+slob.shift]) * slob.nu) #shift is usually -1, this option is for legacy reasons
+
+        φ_next += front * 
+            (  P⁺ * φ_L[:        ,tₘ] + 
+               P⁻ * φ_R[:        ,tₘ] + 
+               Pm *   φ[:        ,tₘ]  ) 
+    end
+    
+    
+    φ_next += removal_scale * φ[:,t-1] + slob.Δts[t-1] * net_source
+    
+    φ_next, φ_L_next, φ_R_next = dr_g_way(φ_next,slob,t)
+    #φ_next, φ_L_next, φ_R_next = linear_way(φ_next,slob,t)
+    #φ_next, φ_L_next, φ_R_next = dr_g_way_modified(φ_next,slob,t)
+
+    return (φ_next, φ_L_next, φ_R_next, -1)
+      
+end
+
+# +
+function dr_g_way(φ_next,slob,t)
+    # DR G WAY but inefficient
+    
+    myend = size(φ_next,1)
+    k = floor(Int64, slob.Δxs[t-1]/slob.Δx) # 1 if doing uniform distribution
+    prop = (slob.Δxs[t-1] - k * slob.Δx)/(2 * slob.Δx) # 0 if doing uniform distribution
+
+    φ_next_ext = change_side(φ_next,k+1,k+1) #insert k+1 repeats onto each side
+    middle_ext = (1:myend) .+ (k+1) #select the middle region without repeats
+
+    middle_right = middle_ext .+ k #select the right k repeats
+    φ_R_next = φ_next_ext[middle_right] .+ prop * (φ_next_ext[middle_right.+1] .- φ_next_ext[middle_right.-1])
+
+    middle_left = middle_ext .- k #select the left k repeats
+    φ_L_next = φ_next_ext[middle_left] .- prop * (φ_next_ext[middle_left.+1] .- φ_next_ext[middle_left.-1])
+
+    return (φ_next, φ_L_next, φ_R_next)
+    
+end
+
+# +
+function linear_way(φ_next,slob,t)
+    myend = size(φ_next,1)
+    k = floor(Int64, slob.Δxs[t-1]/slob.Δx) # 1 if doing uniform distribution
+    prop = (slob.Δxs[t-1] - k * slob.Δx)/(slob.Δx) # 0 if doing uniform distribution
+
+    φ_next_ext = change_side(φ_next,k+1,k+1) #insert k+1 repeats onto each side
+    middle_ext = (1:myend) .+ (k+1) #select the middle region without repeats
+
+    middle_right = middle_ext .+ k #select the right k repeats
+    φ_R_next = φ_next_ext[middle_right] .+ prop * (φ_next_ext[middle_right.+1] .- φ_next_ext[middle_right])
+
+    middle_left = middle_ext .- k #select the left k repeats
+    φ_L_next = φ_next_ext[middle_left] .+ prop * (φ_next_ext[middle_left.-1] .- φ_next_ext[middle_left])
+
+    return (φ_next, φ_L_next, φ_R_next)
+    
+end
+
+# +
+function dr_g_way_modified(φ_next,slob,t)
+    myend = size(φ_next,1)
+    k = floor(Int64, slob.Δxs[t-1]/slob.Δx) # 1 if doing uniform distribution
+    prop = (slob.Δxs[t-1] - k * slob.Δx)/(2 * slob.Δx) # 0 if doing uniform distribution
+
+    φ_next_ext = change_side(φ_next,k+1,k+1) #insert k+1 repeats onto each side
+    middle_ext = (1:myend) .+ (k+1) #select the middle region without repeats
+
+    middle_right = middle_ext .+ k #select the right k repeats
+    
+    diff_ = φ_next_ext[middle_right.+1] .- φ_next_ext[middle_right.-1]
+    avg1_ = (φ_next_ext[middle_right.+1] .+ φ_next_ext[middle_right.-1])./2
+    
+    sum_ = ((2*prop * avg1_) .+ ((1-2*prop)*φ_next_ext[middle_right]))
+    
+    φ_R_next = sum_ .+ prop * diff_
+
+    middle_left = middle_ext .- k #select the left k repeats
+    diff_ = φ_next_ext[middle_left.+1] .- φ_next_ext[middle_left.-1]
+    avg1_ = (φ_next_ext[middle_left.+1] .+ φ_next_ext[middle_left.-1])./2
+    sum_ = ((prop * avg1_) .+ ((1-prop)*φ_next_ext[middle_left]))
+    φ_L_next = sum_ .- prop * diff_
+
+    return (φ_next, φ_L_next, φ_R_next)
+    
+end
+
+# +
+function intra_time_period_simulate_fractional( D::Dict{Int64, DataPasser},
+                                                t::Int64, t_current::Int64, slob_num::Int64)::Nothing 
     slob = D[slob_num].slob
     
-    P, P⁺, P⁻, V_t  = slob.randomness_term(slob, D[slob_num].V, t) 
-
-    source   = slob.source_term(    D,
+    special_function(             D,
+                                    slob_num, t) 
+    
+    P, P⁺, P⁻, V_t  = randomness_function( D, 
                                     slob_num, t) 
 
-    coupling = slob.coupling_term(  D,
+    source   = source_function(             D,
                                     slob_num, t) 
 
-    rl_push  = slob.rl_push_term(   D,
+    coupling = coupling_function(           D,
+                                    slob_num, t) 
+
+    rl_push  = rl_push_function(            D,
                                     slob_num, t) 
 
     net_source = source .+ coupling .+ rl_push
     
-    if slob.michaels_way
+    #if slob.michaels_way
         ###### LITERALLY Michael's code #####################################
-        φ_next = calculate_next_step_original(D[slob_num].lob_densities[:,t-1], slob, P, P⁺, P⁻, net_source)
+    #    φ_next = calculate_next_step_original(D[slob_num].lob_densities[:,t_current-1], slob, P, P⁺, P⁻, net_source)
         
+    
+    if slob.do_exp_dist_times
+        (φ_next,φ_L_next,φ_R_next,test_val) = calculate_next_step_exp(     D[slob_num].lob_densities, D[slob_num].lob_densities_L, D[slob_num].lob_densities_R, 
+                                                                  slob, P, P⁺, P⁻, net_source, t_current) 
     else
-        # the newest version with fractional derivatives
-        φ_next = calculate_next_step(D[slob_num].lob_densities, slob, P, P⁺, P⁻, net_source, t) 
-
+        (φ_next,φ_L_next,φ_R_next,test_val) = calculate_next_step_no_exp(  D[slob_num].lob_densities, D[slob_num].lob_densities_L, D[slob_num].lob_densities_R, 
+                                                                  slob, P, P⁺, P⁻, net_source, t_current) 
     end
+    
+    
+    #if 9 <= t <= 11
+    #print("Time is ",t,
+    #      " and max is ",#maximum(abs.(φ_next_temp.-φ_next)),
+    #                     #maximum(abs.(vcat(φ_next_temp[1],φ_next_temp[1:end-1]).-φ_L_next)),
+    #    
+    #      " and test val is ", test_val ,"\n")
+    #end
+
         
     # store all those intermediate values
-    D[slob_num].lob_densities[:,t] = φ_next
-    D[slob_num].sources[:,t]       = source
-    D[slob_num].couplings[:,t]     = coupling
-    D[slob_num].rl_pushes[:,t]     = rl_push
+ 
+    D[slob_num].lob_densities[:,t_current] = φ_next
+    D[slob_num].lob_densities_L[:,t_current] = φ_L_next 
+    D[slob_num].lob_densities_R[:,t_current] = φ_R_next 
+    D[slob_num].sources[:,t_current]       = source
+    D[slob_num].couplings[:,t_current]     = coupling
+    D[slob_num].rl_pushes[:,t_current]     = rl_push
     D[slob_num].Ps[t]              = P
     D[slob_num].P⁺s[t]             = P⁺
     D[slob_num].P⁻s[t]             = P⁻
     D[slob_num].V[t]               = V_t
+    
+    #special function handles the below
+    #D[slob_num].RLBrains[t]         
+    #D[slob_num].RLViews[t]         
+    
+    return nothing
 
 end
 # -
 
 
-function move_back_densities(D)
-    for slob_num in 1:length(D)
-        D[slob_num].lob_densities[:,1] = D[slob_num].lob_densities[:,2]
-        D[slob_num].sources[:,1]       = D[slob_num].sources[:,2]
-        D[slob_num].couplings[:,1]     = D[slob_num].couplings[:,2]
-        D[slob_num].rl_pushes[:,1]     = D[slob_num].rl_pushes[:,2]
-        D[slob_num].Ps[1]              = D[slob_num].Ps[2]
-        D[slob_num].P⁺s[1]             = D[slob_num].P⁺s[2]
-        D[slob_num].P⁻s[1]             = D[slob_num].P⁻s[2]
-        D[slob_num].V[1]               = D[slob_num].V[2]
+function move_densities(D::Dict{Int64, DataPasser};how_many=1)::Nothing
+    for time in 2:1:(1+how_many)
+        for slob_num in 1:length(D)
+            D[slob_num].lob_densities[:,time-1] = D[slob_num].lob_densities[:,time]
+            D[slob_num].lob_densities_L[:,time-1] = D[slob_num].lob_densities_L[:,time]
+            D[slob_num].lob_densities_R[:,time-1] = D[slob_num].lob_densities_R[:,time]
+            D[slob_num].sources[:,time-1]       = D[slob_num].sources[:,time]
+            D[slob_num].couplings[:,time-1]     = D[slob_num].couplings[:,time]
+            #D[slob_num].rl_pushes[:,time-1]     = D[slob_num].rl_pushes[:,time]
+            
+            D[slob_num].RLBrains[time-1] = D[slob_num].RLBrains[time]
+            D[slob_num].RLViews[time-1]  = D[slob_num].RLViews[time]
+        end
     end
+    
+    return nothing
 end
 
 # +
-function dtrw_solver_fractional(D) #handles change over time logic
+function dtrw_solver_fractional(D::Dict{Int64, DataPasser},p,progress)::Int64 #handles change over time logic
     broke_point = -1
     slob = D[1].slob
     
-    time_steps = to_simulation_time(slob.T, slob.Δt) 
+    x_range_original = slob.x[:] #will not work for different starting ranges across x for different slobs
     
+    time_steps = slob.N#to_simulation_time(slob.T, slob.Δt) 
     
     t = 1 #initial conditions take current t to read values
 
     for slob_num in 1:length(D)
-         D[slob_num].raw_price_paths[1] = D[slob_num].slob.p₀
-         D[slob_num].obs_price_paths[1] = D[slob_num].slob.p₀
-         initial_conditions_numerical( D, t, slob_num) 
+        curr_slob = D[slob_num].slob
+        D[slob_num].raw_price_paths[1] = curr_slob.p₀
+        D[slob_num].obs_price_paths[1] = curr_slob.p₀
+        initial_conditions_numerical( D, t, slob_num) # writes to position 2. Ugh. Fix later. So need to move back first
     end
-    
     
     t = 2
     
     not_broke = reduce(&,[(D[l].raw_price_paths[t-1]!=-1 || !D[l].slob.source_term.do_source) for l in 1:length(D)],init=true) #only true when non of the most recent raw price values are -1
     
+    if slob.store_past_densities
+        move_back = (D) -> nothing
+        t_current = identity
+    else
+        move_back = (D) -> move_densities(D;how_many = length(slob.SK_DP)) # moves the information in time step 2 to time step 1
+        t_current = (t) -> length(slob.SK_DP)+1#2
+    end
     
     while (t <= time_steps) && (not_broke)
         
-        if slob.store_past_densities
-            t_store = t
-        else 
-            move_back_densities(D)
-            t_store = 2
-        end
-            
+        move_back(D)
+    
         for slob_num in 1:length(D)
-            intra_time_period_simulate_fractional( D, t_store, slob_num) 
+            intra_time_period_simulate_fractional( D, t, t_current(t), slob_num ) 
+            
             
             D[slob_num].raw_price_paths[t] = 
-                                    extract_mid_price(D[slob_num].slob, D[slob_num].lob_densities[:,t])
+                                    extract_mid_price(  D[slob_num].slob, 
+                                                        D[slob_num].lob_densities[:,t_current(t)],
+                                                        #price_to_index(D[slob_num].raw_price_paths[t-1]+D[slob_num].slob.price_shift,slob.Δx,slob.p₀-slob.L/2) )
+                                                        price_to_index(D[slob_num].raw_price_paths[t-1],slob.Δx,slob.x[1]) )
+            
+            D[slob_num].x_shifts[t] = D[slob_num].x_shifts[t-1] + D[slob_num].slob.price_shift
+            D[slob_num].slob.price_shift = 0.0
+            
+            if (progress) && (t%10==0)
+                next!(p)
+            end
         end
-        
         
         t += 1 
         not_broke = reduce(&,[(D[l].raw_price_paths[t-1]!=-1 || !D[l].slob.source_term.do_source) for l in 1:length(D)],init=true)
@@ -291,564 +528,102 @@ function dtrw_solver_fractional(D) #handles change over time logic
     for slob_num in 1:length(D)
         D[slob_num].obs_price_paths = 
                     sample_mid_price_path(D[slob_num].slob, D[slob_num].raw_price_paths) 
+        
+        D[slob_num].slob.x = x_range_original[:]
     end
+    
+    return broke_point
     
 end
 # -
+function change_side(φ,left_no,right_no)
+    if      (left_no <  0) && (right_no <  0)
+        return φ[1+(-left_no):end-(-right_no)]
+    elseif (left_no >= 0) && (right_no <  0)
+        return vcat(repeat([φ[1]], left_no) , φ[1:end-(-right_no)])
+    elseif (left_no <  0) && (right_no >= 0)
+        return vcat(φ[1+(-left_no):end],repeat( [φ[end]] ,right_no))
+    else 
+        return vcat( repeat( [φ[1]], left_no) , φ , repeat( [φ[end]] ,right_no) )
+    end
+end
 
-# # New Junk
-
-# +
-# the following four functions are all equations (24) to (26)
-
-# +
-# function calculate_left_jump_probability(Z)
-#     return (exp(-Z))/(exp(Z) + exp(-Z) + 1.0)
-#     #return (exp(-Z))/(exp(Z) + exp(-Z))
-# end
-
-# +
-# function calculate_right_jump_probability(Z)
-#     return (exp(Z))/(exp(Z) + exp(-Z) + 1.0)
-# end
+# # Junk
 
 # +
-# function calculate_self_jump_probability(Z)
-#     return (1.0)/(exp(Z) + exp(-Z) + 1.0)
-# end
-
-# +
-# function calculate_jump_probabilities(slob, V_t)
-#     Z = (3/4) * (V_t * slob.Δx) / (slob.D) #  equation 23 with modification for insertion into 24, 25 and 26
-#                                             #  ≈ V_t * 3/8
-#     p⁻ = calculate_left_jump_probability(Z)
-#     p⁺ = calculate_right_jump_probability(Z)
-#     p = calculate_self_jump_probability(Z)
+function extract_mid_price(slob::SLOB, lob_density::Vector{Float64}, previous_pos::Int64;)::Float64
+    
+    mid_price_ind = extract_mid_price_index(slob,lob_density,previous_pos)
+    l = slob.M+1
+    
+    if (mid_price_ind == -1) || (mid_price_ind == 1)
+        return -1
+    end 
+    
+    left  = map_back(mid_price_ind-1,l)
+    right = map_back(mid_price_ind  ,l)
+    
+    #change = mid_price_ind - previous_pos
     
     
-#     #Z = (V_t * slob.Δx) / (2*slob.D) 
+    # if mid_price_ind == 1
+    #     left = l
+    #     right = 1
+    # else
+    #     left = mid_price_ind - 1
+    #     right = mid_price_ind
+    # end
     
-#     #p⁻ = calculate_left_jump_probability(Z)
-#     #p⁺ = 1-p⁻
-#     #p = 0
-#     #p = calculate_self_jump_probability(Z)
-#     return p⁺, p⁻, p
-#
-# -
-
-
-#function initial_conditions_numerical(slob::SLOB, p_0¹, p_0², t)
-    #ϵ = rand(Normal(0.0, 1.0))
-    #V₀ = sign(ϵ) * min(abs(slob.σ * ϵ), slob.Δx / slob.Δt)
-    #return initial_conditions_numerical(slob, p_0¹, p_0², V₀)
-#end
-
-# +
-#function fractional_choose(n,k)
-#    if (n==0)
-#        return 0
-#    end
-#    #return gamma(n+1)/(gamma(n-k+1)*gamma(k+1)) 
-#    return 1/(n+1) * 1/beta(k+1,n-k+1)
-#end
-
-# +
-#function SibuyaKernelModified(n,γ,nu,Δt)
-#    return (fractional_choose( 1-γ , n ) * (-1)^n + (n==1 ? 1 : 0)) * exp(-n*nu*Δt)
-#end
-
-# +
-#function get_sub_period_time(slob, t, time_steps)
-#    if slob.α <= 0.0 #if using LOB
-#        return 0.0, time_steps - t + 1
-#    end
-#    τ = rand(Exponential(slob.α)) #random exponential time until recalculation
-#    remaining_time = time_steps - t + 1
-#    τ_periods = min(floor(Int, τ/slob.Δt), remaining_time)
-#    return τ, τ_periods #return true time and number of simulation steps
-#                        #until next solve of the initial conditions when using SLOB
-#end
-
-
-# +
-# function dtrw_solver_no_recalc(slob¹::SLOB, slob²::SLOB)
-#     time_steps = to_simulation_time(slob¹.T, slob¹.Δt) 
+    width = 7
     
-#     φ¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores φ¹ for all time
-#     φ² = ones(Float64, slob².M + 1, time_steps + 1) #stores φ² for all time
-    
-#     source¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores sources for all time
-#     source² = ones(Float64, slob².M + 1, time_steps + 1) #stores sources for all time
-    
-#     coupling¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores couplings for all time
-#     coupling² = ones(Float64, slob².M + 1, time_steps + 1) #stores couplings for all time
-    
-#     rl_push¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores rl_pushes for all time
-#     rl_push² = ones(Float64, slob².M + 1, time_steps + 1) #stores rl_pushes for all time
-
-#     p¹ = ones(Float64, time_steps + 1)
-#     p² = ones(Float64, time_steps + 1)
-    
-#     mid_prices¹ = ones(Float64, slob¹.T + 1) #stores mid prices for all time
-#     mid_prices² = ones(Float64, slob².T + 1) #stores mid prices for all time
-
-#     p¹[1] = slob¹.p₀
-#     mid_prices¹[1] = slob¹.p₀
-    
-#     p²[1] = slob².p₀
-#     mid_prices²[1] = slob².p₀
-
-#     P⁺s¹ = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s¹ = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps¹ = fill(1/3, time_steps) #store self jump prob for all time
-#     V¹ = fill(0.0, time_steps+1)
-    
-#     P⁺s² = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s² = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps² = fill(1/3, time_steps) #store self jump prob for all time
-#     V² = fill(0.0, time_steps+1)
-    
-    
-#     t = 1 #initial conditions take current t to read values
-#     φ¹[:, t], source¹[:,t], coupling¹[:,t], rl_push¹[:,t], V¹[t] = initial_conditions_numerical(slob¹, φ¹, p¹,
-#                                                                           slob², φ², p² ,
-#                                                                           t, 0.0) #get initial shape given at t=1
-    
-#     φ²[:, t], source²[:,t], coupling²[:,t], rl_push²[:,t], V²[t] = initial_conditions_numerical(slob², φ², p² ,
-#                                                                           slob¹, φ¹, p¹,
-#                                                                           t, 0.0) #get initial shape given at t=1
-#     t = 2
-#     while t <= time_steps
-#         φ¹[:, t], source¹[:,t], coupling¹[:,t], rl_push¹[:,t], P⁺s¹[t-1], P⁻s¹[t-1], Ps¹[t-1], V¹[t],  
-#         φ²[:, t], source²[:,t], coupling²[:,t], rl_push²[:,t], P⁺s²[t-1], P⁻s²[t-1], Ps²[t-1], V²[t] =
-#             intra_time_period_simulate(     slob¹, φ¹, p¹, V¹,
-#                                             slob², φ², p², V²,
-#                                             t                       )    #get φ at next time step
-                                                        
-#         p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#         p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
-        
-#         t += 1 
-        
-#     end
-    
-#     sample_mid_prices¹ = sample_mid_price_path(slob¹, p¹) #calculate observed mid prices
-#     sample_mid_prices² = sample_mid_price_path(slob², p²) #calculate observed mid prices
-    
-#     return   φ¹, source¹, coupling¹, rl_push¹, p¹, sample_mid_prices¹, P⁺s¹, P⁻s¹, Ps¹, V¹,
-# #             φ², source², coupling², rl_push², p², sample_mid_prices², P⁺s², P⁻s², Ps², V²
-# ##end
-# -
-
-
-
-# +
-# function intra_time_period_simulate(slob¹, φ_list¹, p_list¹, V_list¹, slob², φ_list², p_list², V_list²,
-#                                     t) 
-#     #p_listⁱ is a list of all prices until the most recent
-#     #φⁱ is the most recent order book only
-    
-#     ### corrections
-#     φ¹ = φ_list¹[:, t-1]
-#     φ² = φ_list²[:, t-1]
-    
-#     #p¹ = p_list¹[t-1]
-#     #p² = p_list²[t-1]
-#     ## end of corrections
-    
-    
-    
-#     ϵ¹ = rand(slob¹.dist)
-#     ϵ² = rand(slob².dist)
-    
-#     V_t¹ = sign(ϵ¹) * min(  abs(slob¹.σ * ϵ¹)  ,   slob¹.Δx / slob¹.Δt  ) # Ensures V_t¹ = ϵ¹σ ≤ Δx/Δt  ????
-#     V_t² = sign(ϵ²) * min(  abs(slob².σ * ϵ²)  ,   slob².Δx / slob².Δt  ) # Ensures V_t² = ϵ²σ ≤ Δx/Δt  ????
-    
-#     ##try self correlation
-#     #if (rand()<0.3)
-#     #   prev_V¹ = V_list¹[t-1]
-#     #   V_t¹ = abs(V_t¹) * sign(prev_V¹)  
-#     #end
-#     #if (rand()<0.3)
-#     #   prev_V² = V_list²[t-1]
-#     #   V_t² = abs(V_t²) * sign(prev_V²)  
-#     #end
-#     ##
-    
-
-#     P⁺¹, P⁻¹, P¹ = calculate_jump_probabilities(slob¹, V_t¹)
-#     P⁺², P⁻², P² = calculate_jump_probabilities(slob², V_t²)
-    
-#     myend = size(φ¹,1) #end and myend are now the same in all the below
-#     middle = 2:(myend-1) #all indices excluding the first and last
-
-#     φ₋₁¹ = φ¹[1]   #use left most value as extra ghost point
-#     φ₊₁¹ = φ¹[end] #use right most value as extra ghost point
-#     φ_next¹ = zeros(Float64, myend)
-    
-#     source¹ = zeros(Float64, myend)
-#     coupling¹ = zeros(Float64, myend)
-#     rl_push¹ = zeros(Float64, myend)
-    
-#     φ₋₁² = φ²[1]   #use left most value as extra ghost point
-#     φ₊₁² = φ²[end] #use right most value as extra ghost point
-#     φ_next² = zeros(Float64, myend)
-    
-#     source² = zeros(Float64, myend)
-#     coupling² = zeros(Float64, myend)
-#     rl_push² = zeros(Float64, myend)
-    
-#     #first calculate source terms:
-#     source¹   = slob¹.source_term(    slob¹, φ_list¹, p_list¹, 
-#                                       slob², φ_list², p_list², 
-#                                       t) 
-#     coupling¹ = slob¹.coupling_term(  slob¹, φ_list¹, p_list¹, 
-#                                       slob², φ_list², p_list², 
-#                                       t) 
-#     rl_push¹  = slob¹.rl_push_term(   slob¹, φ_list¹, p_list¹, 
-#                                       slob², φ_list², p_list², 
-#                                       t) 
-    
-#     source²   = slob².source_term(    slob², φ_list², p_list², 
-#                                       slob¹, φ_list¹, p_list¹, 
-#                                       t)
-#     coupling² = slob².coupling_term(  slob¹, φ_list¹, p_list¹, 
-#                                       slob², φ_list², p_list², 
-#                                       t) 
-#     rl_push²  = slob².rl_push_term(   slob¹, φ_list¹, p_list¹, 
-#                                       slob², φ_list², p_list², 
-#                                       t)
-    
-    
-#     net_source¹ = source¹ .+ coupling¹ .+ rl_push¹
-#     net_source² = source² .+ coupling² .+ rl_push²
-    
-#     # the below 3 equations implements equation 9 
-    
-#     # order book 1
-#     φ_next¹[1] = P⁺¹ * φ₋₁¹ + P⁻¹ * φ¹[2] + P¹ * φ¹[1] - 
-#         slob¹.nu * slob¹.Δt * φ¹[1] + 
-#         slob¹.Δt * net_source¹[1]
-
-#     φ_next¹[end] = P⁻¹ * φ₊₁¹ + P⁺¹ * φ¹[end-1] + P¹ * φ¹[end] -
-#         slob¹.nu * slob¹.Δt * φ¹[end] + 
-#         slob¹.Δt * net_source¹[end]
-     
-#     φ_next¹[middle] = P⁺¹ * φ¹[middle.-1] + P⁻¹ * φ¹[middle.+1] + P¹ * φ¹[middle] -
-#         slob¹.nu * slob¹.Δt * φ¹[middle] + 
-#         slob¹.Δt * net_source¹[middle]
-    
-#     # order book 2
-#     φ_next²[1] = P⁺² * φ₋₁² + P⁻² * φ²[2] + P² * φ²[1] - 
-#         slob².nu * slob².Δt * φ²[1] + 
-#         slob².Δt * net_source²[1]
-
-#     φ_next²[end] = P⁻² * φ₊₁² + P⁺² * φ²[end-1] + P² * φ²[end] -
-
-#         slob².nu * slob².Δt * φ²[end] + 
-#         slob².Δt * net_source²[end]
-   
-#     φ_next²[middle] = P⁺² * φ²[middle.-1] + P⁻² * φ²[middle.+1] + P² * φ²[middle] -
-#         slob².nu * slob².Δt * φ²[middle] + 
-#         slob².Δt * net_source²[middle]
-
-#     return   φ_next¹, source¹, coupling¹, rl_push¹, P⁺¹, P⁻¹, P¹, V_t¹,
-#              φ_next², source², coupling², rl_push², P⁺², P⁻², P², V_t²
-# end
-
-
-# +
-    # p_listⁱ is a list of all prices until the most recent
-    # φⁱ is the most recent order book only
-    
-    
-    ####for when force function is included#######
-#     if (slob¹.do_random)
-#         ϵ¹ = rand(slob¹.dist)
-#         V_t¹ = sign(ϵ¹) * min(  abs(slob¹.σ * ϵ¹)  ,   slob¹.Δx / slob¹.Δt  ) # Ensures V_t¹ = ϵ¹σ ≤ Δx/Δt  ????
-#         Z¹ = (1/4) * (V_t¹ * slob¹.Δx) / (slob¹.D)
-#         P¹ = 1-slob¹.r
-#         P⁺¹ = (exp(Z¹))/(exp(Z¹) + exp(-Z¹))*slob¹.r
-#         P⁻¹ = 1 - P¹ - P⁺¹
-#     else
-#         P¹ = 1-slob¹.r
-#         P⁺¹ = (slob¹.r)/2
-#         P⁻¹ = P⁺¹
-#         V_t¹ = 0
-#     end
-    
-#     if (slob².do_random)
-#         ϵ² = rand(slob².dist)
-#         V_t² = sign(ϵ²) * min(  abs(slob².σ * ϵ²)  ,   slob².Δx / slob².Δt  ) # Ensures V_t² = ϵ²σ ≤ Δx/Δt  ????
-#         Z² = (1/4) * (V_t² * slob².Δx) / (slob².D)
-#         P² = 1-slob².r
-#         P⁺² = (exp(Z²))/(exp(Z²) + exp(-Z²))*slob².r
-#         P⁻² = 1 - P² - P⁺²
-#     else
-#         P² = 1-slob².r
-#         P⁺² = (slob².r)/2
-#         P⁻² = P⁺²
-#         V_t² = 0
-#     end
-# -
-
-# # Old junk
-
-# +
-# function dtrw_solver_with_recalc(slob¹::SLOB, slob²::SLOB,kick::Kicker)
-#     time_steps = get_time_steps(slob¹.T, slob¹.Δt) #let's assume T,L,M,D,num_paths,α is the same for both 
-    
-#     φ¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores φ¹ for all time
-#     φ² = ones(Float64, slob².M + 1, time_steps + 1) #stores φ² for all time
-    
-#     source¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores sources for all time
-#     source² = ones(Float64, slob².M + 1, time_steps + 1) #stores sources for all time
-    
-#     coupling¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores couplings for all time
-#     coupling² = ones(Float64, slob².M + 1, time_steps + 1) #stores couplings for all time
-
-#     p¹ = ones(Float64, time_steps + 1)
-#     p² = ones(Float64, time_steps + 1)
-    
-#     mid_prices¹ = ones(Float64, slob¹.T + 1) #stores mid prices for all time
-#     mid_prices² = ones(Float64, slob².T + 1) #stores mid prices for all time
-
-#     p¹[1] = slob¹.p₀
-#     mid_prices¹[1] = slob¹.p₀
-    
-#     p²[1] = slob².p₀
-#     mid_prices²[1] = slob².p₀
-
-#     P⁺s¹ = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s¹ = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps¹ = fill(1/3, time_steps) #store self jump prob for all time
-    
-#     P⁺s² = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s² = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps² = fill(1/3, time_steps) #store self jump prob for all time
-    
-#     t = 1
-    
-#     φ¹[:, t], source¹[:,t], coupling¹[:,t] = initial_conditions_numerical(slob¹, p¹[t], p²[t], 0.0) #get initial shape given at t=1
-#                                                             #the source term and mid price position
-#     φ²[:, t], source²[:,t], coupling²[:,t] = initial_conditions_numerical(slob², p²[t], p¹[t], 0.0) #get initial shape given at t=1
-#                                                             #the source term and mid price position
-
-#     t = 2
-    
-#     τ, τ_periods = get_sub_period_time(slob¹, t, time_steps) #get time periods till next recalc
-    
-#     time_since = 0
-    
-#     while t <= time_steps
-        
-#         kick.DoNow =  kick.Do&&(t>=kick.StartTime)&&(t<kick.EndTime) 
-        
-#         if (time_since <= τ_periods)
-#             φ¹[:, t], source¹[:,t], coupling¹[:,t], P⁺s¹[t-1], P⁻s¹[t-1], Ps¹[t-1],  
-#             φ²[:, t], source²[:,t], coupling²[:,t], P⁺s²[t-1], P⁻s²[t-1], Ps²[t-1] =
-#             intra_time_period_simulate(     slob¹, φ¹[:, t-1], p¹[t-1],
-#                                             slob², φ²[:, t-1], p²[t-1], 
-#                                             kick                        )#get φ at next time step
-#             time_since += 1
+#     if abs(change) > 0.5 * slob.M
+#         if sign(change) > 0
+#             slob.price_shift = -slob.L
 #         else 
-#             φ¹[:, t], source¹[:,t], coupling¹[:,t] = initial_conditions_numerical(slob¹, p¹[t-1], p²[t-1])
-#             φ²[:, t], source²[:,t], coupling²[:,t] = initial_conditions_numerical(slob², p²[t-1], p¹[t-1])
-#             τ, τ_periods = get_sub_period_time(slob¹, t, time_steps) #get time periods till next recalc
-#             time_since = 0
+#             slob.price_shift = +slob.L
 #         end
-
-#         t += 1 
-       
-#         p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#         p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
-
         
+#         slob.x_range = (slob.x_range[1] + slob.price_shift) : slob.L/slob.M : (slob.x_range[end] + slob.price_shift)
+#         slob.x = collect(Float64, slob.x_range)
 #     end
-    
-    
-#     sample_mid_prices¹ = sample_mid_price_path(slob¹, p¹) #calculate observed mid prices
-#     sample_mid_prices² = sample_mid_price_path(slob², p²)
-#     return   φ¹, source¹, p¹, sample_mid_prices¹, P⁺s¹, P⁻s¹, Ps¹,
-#                          φ², source², p², sample_mid_prices², P⁺s², P⁻s², Ps²
-# end
-
-# +
-# function dtrw_solver_with_recalc(slob¹::SLOB, slob²::SLOB,kick::Kicker)
-#     time_steps = get_time_steps(slob¹.T, slob¹.Δt) #let's assume T,L,M,D,num_paths,α is the same for both 
-    
-#     φ¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores φ¹ for all time
-#     φ² = ones(Float64, slob².M + 1, time_steps + 1) #stores φ² for all time
-    
-#     source¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores sources for all time
-#     source² = ones(Float64, slob².M + 1, time_steps + 1) #stores sources for all time
-    
-#     coupling¹ = ones(Float64, slob¹.M + 1, time_steps + 1) #stores couplings for all time
-#     coupling² = ones(Float64, slob².M + 1, time_steps + 1) #stores couplings for all time
-
-#     p¹ = ones(Float64, time_steps + 1)
-#     p² = ones(Float64, time_steps + 1)
-    
-#     mid_prices¹ = ones(Float64, slob¹.T + 1) #stores mid prices for all time
-#     mid_prices² = ones(Float64, slob².T + 1) #stores mid prices for all time
-
-#     p¹[1] = slob¹.p₀
-#     mid_prices¹[1] = slob¹.p₀
-    
-#     p²[1] = slob².p₀
-#     mid_prices²[1] = slob².p₀
-
-#     P⁺s¹ = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s¹ = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps¹ = fill(1/3, time_steps) #store self jump prob for all time
-    
-#     P⁺s² = fill(1/3, time_steps) #stores right jump prob for all time
-#     P⁻s² = fill(1/3, time_steps) #store left jump prob for all time
-#     Ps² = fill(1/3, time_steps) #store self jump prob for all time
-    
-#     t = 1
-    
-#     φ¹[:, t], source¹[:,t], coupling¹[:,t] = initial_conditions_numerical(slob¹, p¹[t], p²[t], 0.0) #get initial shape given at t=1
-#                                                             #the source term and mid price position
-#     φ²[:, t], source²[:,t], coupling²[:,t] = initial_conditions_numerical(slob², p²[t], p¹[t], 0.0) #get initial shape given at t=1
-#                                                             #the source term and mid price position
-
-#     while t <= time_steps
-#         τ, τ_periods = get_sub_period_time(slob¹, t, time_steps) #get time periods till next recalc
-
-#         for τₖ = 1:τ_periods
-#             t += 1 
-            
-#             kick.DoNow =  kick.Do&&(t>=kick.StartTime)&&(t<kick.EndTime) 
-            
-#             φ¹[:, t], source¹[:,t], coupling¹[:,t], P⁺s¹[t-1], P⁻s¹[t-1], Ps¹[t-1],  
-#             φ²[:, t], source²[:,t], coupling²[:,t], P⁺s²[t-1], P⁻s²[t-1], Ps²[t-1] =
-#             intra_time_period_simulate(     slob¹, φ¹[:, t-1], p¹[t-1],
-#                                             slob², φ²[:, t-1], p²[t-1], 
-#                                             kick                        )#get φ at next time step
-            
-                                                        
-#             p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#             p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
-
-#         end
+         
+    # in the below we have that the actual midprice lies between left=(mid_price_index - 1) and right=(mid_price_index)
+    if (!slob.do_interp) || (right < width+1) || (left > slob.M - width + 2)
+        y1 = lob_density[left] #y value (density) to the left
+        y2 = lob_density[right]   #y value (density) to the right
+        #x1 = slob.x[left]      #x value value to the left
+        x2 = slob.x[right]      #x value value to the right
         
         
-#         t += 1
+        #mid_price = (-y1 * slob.Δx)/(y2 - y1) + x1 
+        mid_price = (-y2 * slob.Δx)/(y2 - y1) + x2 
         
-#         if t > time_steps   #the loop ends if we happen to have exceeded the time
-#             sample_mid_prices¹ = sample_mid_price_path(slob¹, p¹) #calculate observed mid prices
-#             sample_mid_prices² = sample_mid_price_path(slob², p²)
-#             return   φ¹, source¹, p¹, sample_mid_prices¹, P⁺s¹, P⁻s¹, Ps¹,
-#                          φ², source², p², sample_mid_prices², P⁺s², P⁻s², Ps²
-#         end
+        #solution to assuming straight approximation between 
+                                                   #left and right point (did the math) (see page 20)
         
         
-#         if slob¹.α > 0.0 || (t==kick.StartTime&&kick.Do==true)#SLOB resolves initial conditions at times ~ Exp(α) if α>0
-#                         #otherwise this is just LOB which only solves initial conditions once
-#             φ¹[:, t], source¹[:,t], coupling¹[:,t] = initial_conditions_numerical(slob¹, p¹[t-1], p²[t-1])
-#             φ²[:, t], source²[:,t], coupling²[:,t] = initial_conditions_numerical(slob², p²[t-1], p¹[t-1])
-            
-#         end #move down 4 lines????????????????????????/
+    else
+        if slob.cyclic_boundary 
+                print("Shouldn't have gotten here")
+        end
+        
+        x2 = slob.x[mid_price_ind]   #x value value to the right
+        
+        if lob_density[mid_price_ind]!=0.0
+            x1 = slob.x[mid_price_ind-1] #x value value to the left
 
-#         p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#         p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
+            lower = mid_price_ind-width
+            upper = mid_price_ind+width-1
+            #print(upper," ")
+            x_range = slob.x[lower]:slob.Δx:slob.x[upper]
 
-        
-#     end
+            mid_price = get_interpolated_intercept(     x_range,
+                                      lob_density[lower:upper],x1,x2)
+        else
+            mid_price = x2
+        end
+    end
     
-    
-#     sample_mid_prices¹ = sample_mid_price_path(slob¹, p¹) #calculate observed mid prices
-#     sample_mid_prices² = sample_mid_price_path(slob², p²)
-#     return   φ¹, source¹, p¹, sample_mid_prices¹, P⁺s¹, P⁻s¹, Ps¹,
-#                          φ², source², p², sample_mid_prices², P⁺s², P⁻s², Ps²
-# end
-
-# +
-# Insertion 1   # to use these insertions, line up the this line with the corresponding line
-                # corresponding line in the original code but include everything below
-#             try
-#                 p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#                 p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
-                
-#             catch e
-#                 println("Bounds Error at t=$t")
-                
-#                 mid_prices¹ = sample_mid_price_path(slob¹, p¹)
-#                 mid_prices² = sample_mid_price_path(slob², p²)
-                
-#                 return   φ¹, p¹, mid_prices¹, P⁺s¹P⁻s¹, Ps¹,
-#                          φ², p², mid_prices², P⁺s², P⁻s², Ps²
-#             end
-
-#             @info "Intra-period simulation. tick price = R$(p¹[t]) @t=$t"
-#             @info "Intra-period simulation. tick price = R$(p²[t]) @t=$t"
-
-# +
-# Insertion 2   # to use these insertions, line up the this line with the corresponding line
-                # corresponding line in the original code but include everything below
-#         try 
-#             p¹[t] = extract_mid_price(slob¹, φ¹[:, t])#get mid price of new φ. Raw mid prices
-#             p²[t] = extract_mid_price(slob², φ²[:, t])#get mid price of new φ. Raw mid prices
-#         catch e
-#             println("Initial Conditions Bounds Error at t=$t")
-#             mid_prices¹ = sample_mid_price_path(slob¹, p¹) #calculate observed mid prices
-#             mid_prices² = sample_mid_price_path(slob², p²)
-#             return   φ¹, p¹, mid_prices¹, P⁺s¹, P⁻s¹, Ps¹,
-#                          φ², p², mid_prices², P⁺s², P⁻s², Ps²
-#         end
-
-
-#         @info "LOB Density recalculated. tick price = R$(p¹[t]) @t=$t"
-#         @info "LOB Density recalculated. tick price = R$(p²[t]) @t=$t"
-
-# +
-# not being used
-# function dtrw_solver(slob::SLOB)
-#     time_steps = get_time_steps(slob.T, slob.Δt)
-#     p = ones(Float64, time_steps + 1)
-#     p[1] = slob.p₀
-
-#     t = 1
-#     φ = initial_conditions_numerical(slob, p[t], 0.0)   #get initial shape given
-#                                                         #the source term and mid price position
-
-#     while t <= time_steps
-#         τ, τ_periods = get_sub_period_time(slob, t, time_steps)
-
-#         for τₖ = 1:τ_periods
-#             t += 1
-#             φ, _, _, _  = intra_time_period_simulate(slob, φ, p[t-1]) #get φ at next time step
-#             p[t] = extract_mid_price(slob, φ) #get mid price of new φ. Raw mid prices
-
-#         end
-        
-#         if t > time_steps  #the loop ends if we happen to have exceeded the time
-#             mid_prices = sample_mid_price_path(slob, p)
-#             return mid_prices #calculate and return observed mid prices
-#         end
-        
-#         t += 1
-        
-#         if slob.α > 0.0 #SLOB resolves initial conditions at times ~ Exp(α) if α>0
-#                         #otherwise this is just LOB which only solves initial conditions once
-#             φ = initial_conditions_numerical(slob, p[t-1])
-#         end
-        
-#         p[t] = extract_mid_price(slob, φ)
-        
-#     end
-    
-#     mid_prices = sample_mid_price_path(slob, p)
-#     return mid_prices #calculate and return observed mid prices
-# end
-
-# -
-
-a = zeros(Float64,2).+1
-
-a += 2*[1,2]
-
-1:4-1
-
+    return mid_price
+end
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 function special_function(D::Dict{Int64, DataPasser},
                                  slob_num::Int64, t::Int64; t_current::Int64=-1, move_price_with=false)
-    if true && t > 2
+    if false && t > 2
         ####Catch AI info
         RLParam_ = D[slob_num].RLParam
         
@@ -18,8 +18,8 @@ function special_function(D::Dict{Int64, DataPasser},
             end
             
             
-            D[slob_num].RLBrains[t:l] = repeat([RLBrain_],l-t+1)
-            D[slob_num].RLViews[t:l] = repeat([RLView_],l-t+1)
+            D[slob_num].RLBrains[t:l] = repeat([RLBrain_],l-t+1,RLView_.f)
+            D[slob_num].RLViews[t:l] = repeat([RLView_],l-t+1,RLView_.f)
             
             return 0
         end
@@ -42,20 +42,20 @@ function special_function(D::Dict{Int64, DataPasser},
         
         ####Pass AI info
         D[slob_num].RLBrains[t] = RLBrain__
-        D[slob_num].RLViews[t] = RLView([x_s[1]-f/3,t/D[slob_num].slob.N],r)
+        D[slob_num].RLViews[t] = RLView([x_s[1]-f/3,t/D[slob_num].slob.N],r,f)
         #print(D[slob_num].RLViews[t].x_s[1]," ",D[slob_num].RLViews[t].x_s[2]," ",D[slob_num].RLViews[t].r,"\n")
 
     end
 
-    if false
+    if true
         #####Do normal market kick
         slob = D[slob_num].slob
         rl = slob.rl_push_term
 
-        if (!rl.Do)&&(t>=rl.StartTime+2)&&(t<rl.EndTime+2) && rl.RemovalType #never run with t=1
+        if (!rl.Do)&&(t>=rl.StartTime+2)&&(t<rl.EndTime+2)&&(rl.RemovalType) #never run with t=1
 
             do_market_order_using_area(D,slob_num,t,rl.Amount;t_current=t_current,move_price_with=move_price_with,
-                                         going_left=!true,take_grad_mid_point=false,take_mid_point=true,do_smoothing=true)
+                                         going_left=true,take_grad_mid_point=false,take_mid_point=true,do_smoothing=true)
 
         end
     end
@@ -72,6 +72,8 @@ function special_function(D::Dict{Int64, DataPasser},
         
     end
 end
+
+
 
 function do_market_order_using_area(D::Dict{Int64, DataPasser},
                                  slob_num::Int64, t::Int64, amount::Float64; t_current::Int64=-1, move_price_with=false, going_left=true, take_grad_mid_point=true, take_mid_point=true, do_smoothing=true,debug_print=false)
@@ -310,6 +312,125 @@ function do_market_order(D::Dict{Int64, DataPasser},
         end
         
     end
+    
+end
+
+# +
+function get_market_order_distance(φ,x_vals,Δx,price,amount
+                                 ; t_current::Int64=-1, move_price_with=false, going_left=true, take_grad_mid_point=true, take_mid_point=true, do_smoothing=true)
+    #slob = D[slob_num].slob
+    #rl = slob.rl_push_term
+    
+    #return temp # return while its still 0 for no pushing 
+    
+
+    my_p = price_to_index(price, Δx, x_vals[1]) + 1 #This picks out the point to the the left of where the intercept is but only with the +1
+    
+    original_price = price
+
+    # i.e.:
+    #    +         +/0           -
+    # my_p-1      my_p       my_p + 1
+    #    A          B            C
+
+    # for proof:
+    # print(my_p-1," ",round(φ[my_p-1];digits=2)," ",my_p," ",round(φ[my_p];digits=2)," ",my_p+1," ",round(φ[my_p+1];digits=2),"\n")
+
+
+    if going_left  #if we're going left
+        dir = -1  # point left
+        start_pos = my_p + 1  #move from B to C 
+    else 
+        dir = +1  # point right
+
+        if φ[my_p] == 0.0 #note that if this happens, you will get my_p included in the list positions_to_set_to_0 below
+            start_pos = my_p - 1  #move from B to A
+        else
+            start_pos = my_p #stay at B
+        end
+    end
+
+    sum_so_far = 0    #  We haven't encountered anything of the opposite sign yet
+
+    curr_pos = start_pos   # We're going to keep track of the current position starting from the start position
+
+    curr_pos += dir                                     # move in the chosen direction
+    potential_next_sum = sum_so_far+abs(φ[curr_pos])    # Now you should for the first time encounter some density that you can start to use the fulfill the order. 
+                                                        # Record how much you could fulfill if you include this order
+
+    while potential_next_sum < amount # Is the potential inclusion of the density you're on enough to fulfill the density?
+
+        sum_so_far = potential_next_sum  # If it is not, then you will need to record that you use all the density avaliable at this point
+
+        curr_pos += dir                  # then move to the next point
+        potential_next_sum = sum_so_far+abs(φ[curr_pos]) # Record how much you could fulfill if you include the density you're on
+    end
+
+    positions_to_set_to_0 = (start_pos+dir):dir:(curr_pos-dir) # check which positions you completely used to fulfill the order and set them to 0
+    #for i in  positions_to_set_to_0              # now loop over all the positions  
+    #                                            # (not including where you started i.e. start_pos+dir or stopped i.e. curr_pos-dir)
+    #    D[slob_num].lob_densities[i,t-1] = 0.0  # set all these to 0
+    #end
+
+    new_final_value = φ[curr_pos]+dir*(amount-sum_so_far) # Subtract what remains of the order from the position at which you stopped
+    #D[slob_num].lob_densities[curr_pos,t-1] = new_final_value
+
+    #if move_price_with
+    #    D[slob_num].raw_price_paths[t-1] = index_to_price((curr_pos+1)-1, slob.Δx, slob.x[1])  # Set the price to the point at which you stopped
+    #                                                                                           # -1 is here for now as I still need to correct the function itself
+    #end
+
+    if take_grad_mid_point 
+        y1 = new_final_value #y value (density) to the left
+        y2 = φ[start_pos]   #y value (density) to the right
+        #x1 = slob.x[start_pos]      #x value value to the left
+        x2 = x_vals[start_pos]      #x value value to the right
+
+
+        #mid_price = (-y1 * slob.Δx)/(y2 - y1) + x1 
+        mid_price = (-y2 * (start_pos-curr_pos)*Δx)/(y2 - y1) + x2 
+
+        #D[slob_num].raw_price_paths[t-1] = mid_price
+    end
+
+    if take_mid_point
+
+        if length(positions_to_set_to_0) == 0 # if you didn't set anything to 0. Can only happen if φ[my_p] != 0.0
+            y1 = new_final_value              # y value (density) to the left
+            y2 = φ[start_pos]                 # y value (density) to the right
+            #x1 = slob.x[start_pos]           # x value value to the left
+            x2 = x_vals[start_pos]            # x value value to the right
+
+            #mid_price = (-y1 * slob.Δx)/(y2 - y1) + x1 
+            mid_price = (-y2 * (start_pos-curr_pos)*Δx)/(y2 - y1) + x2 
+        else
+            closest_zero_index = maximum(positions_to_set_to_0)
+            farthest_zero_index = minimum(positions_to_set_to_0)
+
+            closest_zero_x     = x_vals[closest_zero_index]
+            farthest_zero_x    = x_vals[farthest_zero_index]
+
+            if do_smoothing #&& (length(positions_to_set_to_0)>1)
+
+                beyond_farthest_zero_x = x_vals[farthest_zero_index + dir]
+
+                old_mid_price    = (closest_zero_x + farthest_zero_x              )/2
+                target_mid_price = (closest_zero_x + beyond_farthest_zero_x       )/2
+
+                frac_of_way = (φ[curr_pos]-new_final_value)/(φ[curr_pos])
+
+                mid_price = (1-frac_of_way) * old_mid_price + frac_of_way * target_mid_price
+            else
+                mid_price = (closest_zero_x + farthest_zero_x)/2
+            end
+        end
+
+        #D[slob_num].raw_price_paths[t-1] = mid_price
+
+    end
+    
+    return abs(mid_price - original_price)
+        
     
 end
 # -

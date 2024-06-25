@@ -22,6 +22,8 @@ testing = true
 test_folder = "CheckData as of June 29"
 seed = 942
 
+cd("/home/derickdiana/Desktop/Masters/")
+
 function compare_objects(current_object,name_of_object_to_load; threshold = 1e-11, exact = false)
     name = string(test_folder,"/",name_of_object_to_load)
     compare = load_object(name)

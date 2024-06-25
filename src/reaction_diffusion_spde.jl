@@ -18,6 +18,7 @@ function initial_conditions_numerical(D::Dict{Int64, DataPasser},
     A[1,2] = 2*slob¹.D/(slob¹.Δx^2)
     A[end, end-1] = 2*slob¹.D/(slob¹.Δx^2)
     
+    
     source   = source_function(   D,
                                     slob_num, t) 
 
@@ -55,8 +56,8 @@ function initial_conditions_numerical(D::Dict{Int64, DataPasser},
     #D[slob_num].RLViews[t]          = RLView([1.0,1.0],0.0)
     c = D[slob_num].RLParam.c
     len = length(c)
-    D[slob_num].RLViews[t]         = RLView([1.0,1.0],0.0)
-    D[slob_num].RLViews[t-1]         = RLView([1.0,1.0],0.0)
+    D[slob_num].RLViews[t]         = RLView([1.0,1.0],0.0,0.0)
+    D[slob_num].RLViews[t-1]         = RLView([1.0,1.0],0.0,0.0)
     D[slob_num].RLBrains[t]        =    ContinuousLearning.copy_brain(D[slob_num].RLParam.init_brain) #ContinuousLearning.make_brain(len)
     D[slob_num].RLBrains[t-1]        = ContinuousLearning.copy_brain(D[slob_num].RLParam.init_brain) #ContinuousLearning.make_brain(len)
     

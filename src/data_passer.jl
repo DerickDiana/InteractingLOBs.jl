@@ -18,6 +18,7 @@ mutable struct DataPasser
     RLBrains::Vector{RLBrain}
     RLParam::RLParam
     RLViews::Vector{RLView}
+    temp::Vector{Float64}
 end
 
 function DataPasser(slob::SLOB,
@@ -33,7 +34,8 @@ function DataPasser(slob::SLOB,
     P⁻s::Vector{Float64},
     Ps::Vector{Float64},
     V::Vector{Float64},
-    x_shifts::Vector{Float64})
+    x_shifts::Vector{Float64},
+    temp::Vector{Float64})
     
     return DataPasser(slob,
     lob_densities,
@@ -51,6 +53,7 @@ function DataPasser(slob::SLOB,
     x_shifts,
     Array{RLBrain}(undef,0),
     RLParam(),
-    Array{RLView}(undef,0)
+    Array{RLView}(undef,0),
+    temp
     )
 end

@@ -306,6 +306,7 @@ end
 function InteractOrderBooks(slobs::Array{SLOB,1}, RLParams::Vector{RLParam}, seed::Int=-1, progress = false; return_break_points=false, progress_bar = -1, finish_progress_bar = true)#same but returns more stuff
     #handles change over paths logic
     #print(slobs[1].scale)
+    # WHERE IS RLBRAIN?
     
     slob = slobs[1]
     
@@ -367,7 +368,7 @@ function InteractOrderBooks(slobs::Array{SLOB,1}, RLParams::Vector{RLParam}, see
 
             my_struct = DataPasser(slobs[slob_num], lob_densities, lob_densities_L, lob_densities_R, sources, couplings, rl_pushes,
                                     raw_price_paths, obs_price_paths,
-                                    P⁺s, P⁻s, Ps, V, x_shifts, RLBrains , RLParams[slob_num], RLViews)
+                                    P⁺s, P⁻s, Ps, V, x_shifts, RLBrains , RLParams[slob_num], RLViews,[0.7])
             ### end of reserve memory
             
             inner_dict[slob_num] = my_struct

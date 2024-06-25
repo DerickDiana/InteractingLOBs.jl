@@ -359,6 +359,230 @@ end
 
 # # Visualizers
 
+# ## Density
+
+# +
+"""
+    plot_density_visual(Simulation_Time, Which_SLOB, Data_object; <keyword args>)
+
+A core function for visualizing the order book. Returns a plot (by default centered at the intercept of the order book with the x-axis) 
+which shows 7 lines:
+
+-(1) The LOB (or LatOB) density itself\n
+-(2) Its left approximated version for the exponential algorithm\n 
+-(3) Its right approximated version for the exponential algorithm\n 
+-(4) Couplings\n
+-(5) Arrivals\n
+-(6) Input from RL source\n
+-(7) Removals\n
+
+In addition it shows the intercept (i.e. price) and Δxₘ shifts away from the price. It does this at Simulation\\_Time. As the Data\\_object 
+has many different SLOBs inside of it, one needs to specify Which\\_SLOB to use.
+
+# Arguments
+- `dosum::Bool=false`: When providing a Data object which contains two related SLOBs, visualize their sum rather than any individual one
+- `plot_raw_price::Bool=true`: Place a dot at the intercept of the LOB with the x-axis
+- `x_axis_width::Float64=-1`: Distance from the intercept to the edges of the plot (how much of the x-axis is seen). If left as -1, it defaults to 1/5 of the total simulated x-axis
+- `center::Int64=-2`: When set to -2, the view is centered at the intercept at the beginning of the simulation
+                      When set to -1, the view is centered at the current intercept.
+                      When set to any positive value, the view is centered at that positive value.
+- `shift_with_loop:Bool=false`: Only matters if center==-1. If true, then when the current intercept loops round due to cyclic boundary conditions, the view also loops around.
+- `marker_size::Float64=1.6`: The marker size used for the intercept and Δxₘ displacement.
+- `overall_alpha::Array{Float64}`: An array of 7 float values in the range [0,1] which determines the alpha value of graph of each of the 7 displayed lines in order (see above).
+- `do_interp::Bool=false`: Whether to do a smooth interpolation between the points using the same algorithm as used to determine the smooth price impact.
+- `path_to_plot::Int64=1`: Data object may have many paths, one needs to specify which to plot.
+- `size::Tuple(Int64,Int64)`: The size of the outputted plot.
+- `kw_for_plot::Tuple(...)`: A tuple with keywords which will be passed at the very end of this function to the 'plot' function as `plot(;kw_for_args...)`. 
+                             Thus one may do, e.g: `kw_for_plot=(xlabel="x",)` which results in `plot(;xlabel="x")` via the `...` operation.
+- `do_left::Bool=true`: Whether to include (2) in the above list of 7 lines
+- `do_right::Bool=true`: Whether to include (3) in the above list of 7 lines
+- `label_price::Bool=true`: Whether to include a label on the plot which reads "p=..." and shows the value of the intercept.
+- `label_Δxₘ::Bool=true`: Whether to include a label on the plot which reads "Δxₘ=..." and shows the value of Δxₘ at this time.
+- `annotate_pos::PositionKeyword=:topright`: The position of the two above mentioned labels. Possible inputs are the same as those 
+                                             used to define legend position in Plot e.g. `:topleft, :top, :left, :bottomright:, :bottom, :right`
+"""
+
+function plot_density_visual(Dat, s, lob_num; 
+                dosum=false, plot_raw_price=true, x_axis_width = -1, center = -2, shift_with_loop=false, marker_size=1.6,overall_alpha=[1.0,1.0,1.0,1.0,1.0,1.0,1.0],
+                do_interp=-1, path_to_plot=1, size=(1000,1000), kw_for_plot=(), shift_back_approx=true, do_left=true,do_right=true,label_price=true,label_Δxₘ=true,
+                annotate_pos=:topright)
+    
+    
+    dat = Dat[path_to_plot][lob_num]
+    lob_model = dat.slob
+    
+    if !lob_model.store_past_densities
+        @warn "Should not be using this function since you did not store the densities\n"
+    end
+    
+    if do_interp==-1
+        do_interp = lob_model.do_interp
+    end
+   
+    mult = lob_model.Δt
+    
+    shift = dat.x_shifts[s]
+    
+    if center == -1
+        center = dat.raw_price_paths[s]
+    end
+    
+    if center == -2
+        center = lob_model.p₀
+    end
+    
+    if shift_with_loop
+        camera_shift = shift
+    else
+        camera_shift = 0
+    end
+    
+    if x_axis_width==-1
+        x_axis_width = dat.slob.L/15
+    end
+    
+    if lob_model.old_way
+        removal_fraction = - lob_model.nu * lob_model.Δt
+    else
+        removal_fraction = exp(-lob_model.nu * lob_model.Δt) - 1
+    end
+    
+    
+    x_axis  = [center-x_axis_width + camera_shift,center+x_axis_width + camera_shift]
+    
+    lob_densities   = dat.lob_densities[:,s]
+    lob_densities_L = dat.lob_densities_L[:,s]
+    lob_densities_R = dat.lob_densities_R[:,s]
+    couplings       = dat.couplings[:,s+1]#-1 not there before
+    sources         = dat.sources[:,s+1]#-1 not there before
+    rl_pushes       = dat.rl_pushes[:,s+1]#-1 not there before
+    removals        = dat.lob_densities[:,s]
+    
+    if dosum
+        dat2 = Dat[path_to_plot][3-lob_num]
+        lob_densities   .+= dat2.lob_densities[:,s]
+        lob_densities_L .+= dat2.lob_densities_L[:,s]
+        lob_densities_R .+= dat2.lob_densities_R[:,s]
+        couplings       .+= dat2.couplings[:,s+1]#-1 not there before
+        sources         .+= dat2.sources[:,s+1]#-1 not there before
+        rl_pushes       .+= dat2.rl_pushes[:,s+1]#-1 not there before
+        removals        .+= dat2.lob_densities[:,s]
+    end
+    
+    lob_densities = lob_densities
+    lob_densities_L = lob_densities_L
+    lob_densities_R = lob_densities_R
+    couplings = mult.*couplings
+    sources = mult.*sources
+    rl_pushes = mult.*rl_pushes
+    removals = removal_fraction.*removals
+    
+    x_range = lob_model.x .+ shift 
+    common = (label="",markersize=marker_size,markerstrokewidth=0.0)
+    
+    
+    Δx_ = dat.slob.Δxs[s-1]
+    
+    if shift_back_approx
+        x_range_shifted_left = x_range.-Δx_
+        x_range_shifted_right = x_range.+Δx_
+    else
+        x_range_shifted_left = x_range
+        x_range_shifted_right = x_range
+    end
+    
+    plt = 
+     scatter(x_range,                lob_densities,   color=1, alpha = overall_alpha[1];common...); 
+    if do_left
+    scatter!(x_range_shifted_left,   lob_densities_L, color=1, alpha = overall_alpha[2];common...); end
+    if do_right
+    scatter!(x_range_shifted_right,  lob_densities_R, color=1, alpha = overall_alpha[3];common...); end
+    scatter!(x_range,                couplings,       color=2, alpha = overall_alpha[4];common...) ;
+    scatter!(x_range,                sources,         color=3, alpha = overall_alpha[5];common...) ;
+    scatter!(x_range,                removals,        color=5, alpha = overall_alpha[6];common...) ;
+    scatter!(x_range,                rl_pushes,       color=4, alpha = overall_alpha[7];common...) ;
+    
+    check_zeros = (s==1)
+    if do_interp
+        x_range = lob_model.x_range#lob_model.x[1]:(lob_model.L/lob_model.M):lob_model.x[end]
+        x_range_dense = lob_model.x[1]:(lob_model.L/lob_model.M/10):lob_model.x[end] .+ shift 
+        
+        lob_densities   = auto_interpolator(x_range,lob_densities,  x_range_dense;check_zeros=check_zeros)
+        if do_left
+        lob_densities_L = auto_interpolator(x_range,lob_densities_L,x_range_dense;check_zeros=check_zeros) end
+        if do_right
+        lob_densities_R = auto_interpolator(x_range,lob_densities_R,x_range_dense;check_zeros=check_zeros) end
+        sources         = auto_interpolator(x_range,sources,        x_range_dense;check_zeros=check_zeros)
+        couplings       = auto_interpolator(x_range,couplings,      x_range_dense;check_zeros=check_zeros)
+        removals        = auto_interpolator(x_range,removals,       x_range_dense;check_zeros=check_zeros)
+        rl_pushes       = auto_interpolator(x_range,rl_pushes,      x_range_dense;check_zeros=check_zeros)
+    else
+        x_range_dense = lob_model.x .+ shift
+    end
+    
+    if shift_back_approx
+        x_range_shifted_left_dense = x_range_dense.-Δx_
+        x_range_shifted_right_dense = x_range_dense.+Δx_
+    else
+        x_range_shifted_left_dense = x_range_dense
+        x_range_shifted_right_dense = x_range_dense
+    end
+    
+    
+    plot!(x_range_dense,               lob_densities,   label="φⁱ",      color=1,alpha = overall_alpha[1]); 
+    if do_left
+    plot!(x_range_shifted_left_dense,  lob_densities_L, label="φⁱ⁻¹",    color=1,alpha = overall_alpha[2],style=:dash); end
+    if do_right
+    plot!(x_range_shifted_right_dense, lob_densities_R, label="φⁱ⁺¹",    color=1,alpha = overall_alpha[3],style=:dashdotdot); end
+    #plot!(x_range_dense,           couplings, color=2, label="Coupling",alpha = overall_alpha[4]) ;
+    plot!(x_range_dense,               sources,         label="Arrivals", color=3,alpha = overall_alpha[5]) ;
+    plot!(x_range_dense,               removals,        label="Removals", color=5,alpha = overall_alpha[6]) ;
+    plot!(x_range_dense,               rl_pushes,       label="Impulse",  color=4,alpha = overall_alpha[7]) ;
+    
+    
+    price_pos = dat.raw_price_paths[s]
+    if (plot_raw_price)
+        if (isinteger(s*lob_model.Δt))
+            mycol = :black
+        else 
+            mycol = 1
+        end
+        
+        
+        scatter!([price_pos]    ,[0],label="p";                   
+                                                    markersize=3,markercolor= mycol ,markerstrokewidth=0.5)
+        if do_left
+        scatter!([price_pos-Δx_],[0],label="p-Δxₘ"     ;markershape=:star4,
+                                                    markersize=5,markercolor="black",markerstrokewidth=0.5) end
+        if do_right
+        scatter!([price_pos+Δx_],[0],label="p+Δxₘ"     ;markershape=:star4,
+                                                    markersize=5,markercolor="black",markerstrokewidth=0.5) end
+    end
+    
+    if lob_model.do_exp_dist_times
+        real_time = round(lob_model.Δts_cum[s],digits=2)#round(lob_model.Δt * (s-1),digits=3)
+    else
+        real_time = round(lob_model.Δt * (s-1),digits=3)
+    end
+    
+    top_right_label = ""
+    if label_price
+        top_right_label *= my_pad("  p   = ",8;do_left=false) * my_pad(string(round(price_pos,digits=2)),8;do_left=false)
+    end
+    top_right_label     *= "\n"
+    if label_Δxₘ
+        top_right_label *= my_pad("Δxₘ = ",8;do_left=false) * my_pad(string(round(Δx_,digits=2)),8;do_left=false)
+    end
+    top_right_label     *= "\n"
+    
+    annotate!((annotate_pos,text(top_right_label,8)))
+    
+    plot!( legend=:bottomleft, title="", xlab="Price at time=$real_time", ylab="Densities",xlim=x_axis)#, legendfontsize=17.0)
+    plot!(;kw_for_plot...)
+    return plt
+end;
+# -
+
 # ## Price impact
 
 # +
@@ -586,230 +810,6 @@ end
 # -
 
 
-# ## Density
-
-# +
-"""
-    plot_density_visual(Simulation_Time, Which_SLOB, Data_object; <keyword args>)
-
-A core function for visualizing the order book. Returns a plot (by default centered at the intercept of the order book with the x-axis) 
-which shows 7 lines:
-
--(1) The LOB (or LatOB) density itself\n
--(2) Its left approximated version for the exponential algorithm\n 
--(3) Its right approximated version for the exponential algorithm\n 
--(4) Couplings\n
--(5) Arrivals\n
--(6) Input from RL source\n
--(7) Removals\n
-
-In addition it shows the intercept (i.e. price) and Δxₘ shifts away from the price. It does this at Simulation\\_Time. As the Data\\_object 
-has many different SLOBs inside of it, one needs to specify Which\\_SLOB to use.
-
-# Arguments
-- `dosum::Bool=false`: When providing a Data object which contains two related SLOBs, visualize their sum rather than any individual one
-- `plot_raw_price::Bool=true`: Place a dot at the intercept of the LOB with the x-axis
-- `x_axis_width::Float64=-1`: Distance from the intercept to the edges of the plot (how much of the x-axis is seen). If left as -1, it defaults to 1/5 of the total simulated x-axis
-- `center::Int64=-2`: When set to -2, the view is centered at the intercept at the beginning of the simulation
-                      When set to -1, the view is centered at the current intercept.
-                      When set to any positive value, the view is centered at that positive value.
-- `shift_with_loop:Bool=false`: Only matters if center==-1. If true, then when the current intercept loops round due to cyclic boundary conditions, the view also loops around.
-- `marker_size::Float64=1.6`: The marker size used for the intercept and Δxₘ displacement.
-- `overall_alpha::Array{Float64}`: An array of 7 float values in the range [0,1] which determines the alpha value of graph of each of the 7 displayed lines in order (see above).
-- `do_interp::Bool=false`: Whether to do a smooth interpolation between the points using the same algorithm as used to determine the smooth price impact.
-- `path_to_plot::Int64=1`: Data object may have many paths, one needs to specify which to plot.
-- `size::Tuple(Int64,Int64)`: The size of the outputted plot.
-- `kw_for_plot::Tuple(...)`: A tuple with keywords which will be passed at the very end of this function to the 'plot' function as `plot(;kw_for_args...)`. 
-                             Thus one may do, e.g: `kw_for_plot=(xlabel="x",)` which results in `plot(;xlabel="x")` via the `...` operation.
-- `do_left::Bool=true`: Whether to include (2) in the above list of 7 lines
-- `do_right::Bool=true`: Whether to include (3) in the above list of 7 lines
-- `label_price::Bool=true`: Whether to include a label on the plot which reads "p=..." and shows the value of the intercept.
-- `label_Δxₘ::Bool=true`: Whether to include a label on the plot which reads "Δxₘ=..." and shows the value of Δxₘ at this time.
-- `annotate_pos::PositionKeyword=:topright`: The position of the two above mentioned labels. Possible inputs are the same as those 
-                                             used to define legend position in Plot e.g. `:topleft, :top, :left, :bottomright:, :bottom, :right`
-"""
-
-function plot_density_visual(Dat, s, lob_num; 
-                dosum=false, plot_raw_price=true, x_axis_width = -1, center = -2, shift_with_loop=false, marker_size=1.6,overall_alpha=[1.0,1.0,1.0,1.0,1.0,1.0,1.0],
-                do_interp=-1, path_to_plot=1, size=(1000,1000), kw_for_plot=(), shift_back_approx=true, do_left=true,do_right=true,label_price=true,label_Δxₘ=true,
-                annotate_pos=:topright)
-    
-    
-    dat = Dat[path_to_plot][lob_num]
-    lob_model = dat.slob
-    
-    if !lob_model.store_past_densities
-        @warn "Should not be using this function since you did not store the densities\n"
-    end
-    
-    if do_interp==-1
-        do_interp = lob_model.do_interp
-    end
-   
-    mult = lob_model.Δt
-    
-    shift = dat.x_shifts[s]
-    
-    if center == -1
-        center = dat.raw_price_paths[s]
-    end
-    
-    if center == -2
-        center = lob_model.p₀
-    end
-    
-    if shift_with_loop
-        camera_shift = shift
-    else
-        camera_shift = 0
-    end
-    
-    if x_axis_width==-1
-        x_axis_width = dat.slob.L/15
-    end
-    
-    if lob_model.old_way
-        removal_fraction = - lob_model.nu * lob_model.Δt
-    else
-        removal_fraction = exp(-lob_model.nu * lob_model.Δt) - 1
-    end
-    
-    
-    x_axis  = [center-x_axis_width + camera_shift,center+x_axis_width + camera_shift]
-    
-    lob_densities   = dat.lob_densities[:,s]
-    lob_densities_L = dat.lob_densities_L[:,s]
-    lob_densities_R = dat.lob_densities_R[:,s]
-    couplings       = dat.couplings[:,s+1]#-1 not there before
-    sources         = dat.sources[:,s+1]#-1 not there before
-    rl_pushes       = dat.rl_pushes[:,s+1]#-1 not there before
-    removals        = dat.lob_densities[:,s]
-    
-    if dosum
-        dat2 = Dat[path_to_plot][3-lob_num]
-        lob_densities   .+= dat2.lob_densities[:,s]
-        lob_densities_L .+= dat2.lob_densities_L[:,s]
-        lob_densities_R .+= dat2.lob_densities_R[:,s]
-        couplings       .+= dat2.couplings[:,s+1]#-1 not there before
-        sources         .+= dat2.sources[:,s+1]#-1 not there before
-        rl_pushes       .+= dat2.rl_pushes[:,s+1]#-1 not there before
-        removals        .+= dat2.lob_densities[:,s]
-    end
-    
-    lob_densities = lob_densities
-    lob_densities_L = lob_densities_L
-    lob_densities_R = lob_densities_R
-    couplings = mult.*couplings
-    sources = mult.*sources
-    rl_pushes = mult.*rl_pushes
-    removals = removal_fraction.*removals
-    
-    x_range = lob_model.x .+ shift 
-    common = (label="",markersize=marker_size,markerstrokewidth=0.0)
-    
-    
-    Δx_ = dat.slob.Δxs[s-1]
-    
-    if shift_back_approx
-        x_range_shifted_left = x_range.-Δx_
-        x_range_shifted_right = x_range.+Δx_
-    else
-        x_range_shifted_left = x_range
-        x_range_shifted_right = x_range
-    end
-    
-    plt = 
-     scatter(x_range,                lob_densities,   color=1, alpha = overall_alpha[1];common...); 
-    if do_left
-    scatter!(x_range_shifted_left,   lob_densities_L, color=1, alpha = overall_alpha[2];common...); end
-    if do_right
-    scatter!(x_range_shifted_right,  lob_densities_R, color=1, alpha = overall_alpha[3];common...); end
-    scatter!(x_range,                couplings,       color=2, alpha = overall_alpha[4];common...) ;
-    scatter!(x_range,                sources,         color=3, alpha = overall_alpha[5];common...) ;
-    scatter!(x_range,                removals,        color=5, alpha = overall_alpha[6];common...) ;
-    scatter!(x_range,                rl_pushes,       color=4, alpha = overall_alpha[7];common...) ;
-    
-    check_zeros = (s==1)
-    if do_interp
-        x_range = lob_model.x_range#lob_model.x[1]:(lob_model.L/lob_model.M):lob_model.x[end]
-        x_range_dense = lob_model.x[1]:(lob_model.L/lob_model.M/10):lob_model.x[end] .+ shift 
-        
-        lob_densities   = auto_interpolator(x_range,lob_densities,  x_range_dense;check_zeros=check_zeros)
-        if do_left
-        lob_densities_L = auto_interpolator(x_range,lob_densities_L,x_range_dense;check_zeros=check_zeros) end
-        if do_right
-        lob_densities_R = auto_interpolator(x_range,lob_densities_R,x_range_dense;check_zeros=check_zeros) end
-        sources         = auto_interpolator(x_range,sources,        x_range_dense;check_zeros=check_zeros)
-        couplings       = auto_interpolator(x_range,couplings,      x_range_dense;check_zeros=check_zeros)
-        removals        = auto_interpolator(x_range,removals,       x_range_dense;check_zeros=check_zeros)
-        rl_pushes       = auto_interpolator(x_range,rl_pushes,      x_range_dense;check_zeros=check_zeros)
-    else
-        x_range_dense = lob_model.x .+ shift
-    end
-    
-    if shift_back_approx
-        x_range_shifted_left_dense = x_range_dense.-Δx_
-        x_range_shifted_right_dense = x_range_dense.+Δx_
-    else
-        x_range_shifted_left_dense = x_range_dense
-        x_range_shifted_right_dense = x_range_dense
-    end
-    
-    
-    plot!(x_range_dense,               lob_densities,   label="φⁱ",      color=1,alpha = overall_alpha[1]); 
-    if do_left
-    plot!(x_range_shifted_left_dense,  lob_densities_L, label="φⁱ⁻¹",    color=1,alpha = overall_alpha[2],style=:dash); end
-    if do_right
-    plot!(x_range_shifted_right_dense, lob_densities_R, label="φⁱ⁺¹",    color=1,alpha = overall_alpha[3],style=:dashdotdot); end
-    #plot!(x_range_dense,           couplings, color=2, label="Coupling",alpha = overall_alpha[4]) ;
-    plot!(x_range_dense,               sources,         label="Arrivals", color=3,alpha = overall_alpha[5]) ;
-    plot!(x_range_dense,               removals,        label="Removals", color=5,alpha = overall_alpha[6]) ;
-    plot!(x_range_dense,               rl_pushes,       label="Impulse",  color=4,alpha = overall_alpha[7]) ;
-    
-    
-    price_pos = dat.raw_price_paths[s]
-    if (plot_raw_price)
-        if (isinteger(s*lob_model.Δt))
-            mycol = :black
-        else 
-            mycol = 1
-        end
-        
-        
-        scatter!([price_pos]    ,[0],label="p";                   
-                                                    markersize=3,markercolor= mycol ,markerstrokewidth=0.5)
-        if do_left
-        scatter!([price_pos-Δx_],[0],label="p-Δxₘ"     ;markershape=:star4,
-                                                    markersize=5,markercolor="black",markerstrokewidth=0.5) end
-        if do_right
-        scatter!([price_pos+Δx_],[0],label="p+Δxₘ"     ;markershape=:star4,
-                                                    markersize=5,markercolor="black",markerstrokewidth=0.5) end
-    end
-    
-    if lob_model.do_exp_dist_times
-        real_time = round(lob_model.Δts_cum[s],digits=2)#round(lob_model.Δt * (s-1),digits=3)
-    else
-        real_time = round(lob_model.Δt * (s-1),digits=3)
-    end
-    
-    top_right_label = ""
-    if label_price
-        top_right_label *= my_pad("  p   = ",8;do_left=false) * my_pad(string(round(price_pos,digits=2)),8;do_left=false)
-    end
-    top_right_label     *= "\n"
-    if label_Δxₘ
-        top_right_label *= my_pad("Δxₘ = ",8;do_left=false) * my_pad(string(round(Δx_,digits=2)),8;do_left=false)
-    end
-    top_right_label     *= "\n"
-    
-    annotate!((annotate_pos,text(top_right_label,8)))
-    
-    plot!( legend=:bottomleft, title="", xlab="Price at time=$real_time", ylab="Densities",xlim=x_axis)#, legendfontsize=17.0)
-    plot!(;kw_for_plot...)
-    return plt
-end;
-# -
-
 # ## Price change
 
 # +
@@ -822,7 +822,6 @@ function fit_and_plot_price_change((steps,volumes,my_labels),mean_price_impacts,
     # the below is just for readability
     modify_plot__t = modify_plot_t
     modify_plot__p = modify_plot_p
-    
     
     li_len = length(my_labels)
     ti_len = size(mean_price_impacts)[1]
@@ -872,10 +871,10 @@ function fit_and_plot_price_change((steps,volumes,my_labels),mean_price_impacts,
     end
     
     if kick_end_time!=-1
-        vline!([kick_end_time],label="End of meta-order")
+        #vline!([modify_plot__t(kick_end_time)],label="End of meta-order")
     end
     
-    plot!(xlabel="Time (t)",ylabel="Price (p(t))";forplot...)
+    plot!(xlabel=L"t/T",ylabel=L"\mathcal{I}(Q,t)/\max_t(\mathcal{I}(Q,t))";forplot...)
     
 end
 # -

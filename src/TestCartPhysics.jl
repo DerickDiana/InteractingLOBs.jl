@@ -2,12 +2,30 @@
 using Main
 Main.include("../../ContinuousLearning.jl/src/ContinuousLearning.jl")
 cntl = Main.ContinuousLearning
+using Plots
+using SimpleDirectMediaLayer
+using SimpleDirectMediaLayer.LibSDL2
+
+
+
+# +
+#import Pkg;
+#Pkg.add(Plot)
+# -
 
 using Parameters
+simple_pendulum = true #are we simulating a pendulum swing back and forth, or a pendulum on a cart?
+method = 1 
+# method = 1 represents using Actor Critic
+# method = 2 represents using known Input Gain Matrix
+# method = 3 represents using unknown (numeric) Input Gain Matrix
 
 # # Physics
 
+# +
 # physics parameters
+# https://sharpneat.sourceforge.io/research/cart-pole/cart-pole-equations.html
+
 x = 0.0
 ∂x = 0.0
 ∂∂x = 0.0
@@ -17,16 +35,35 @@ x = 0.0
 ∂∂θ = 0.0
 f_ = 0.0
 f_c = 0
-set = (l=1.0,μ_c=0.3,μ_p=0.01,m=1.0,M=1.5,g=9.8)
-dt = 0.01
-sc = 100
+
+if simple_pendulum
+    set = (l=1.0,μ_c=0.3,μ_p=0.01,m=1.0,M=1.5,g=9.8)  
+else
+    set = (l=1.0,μ_c=0.3,μ_p=0.01,m=1.0,M=1.5,g=9.8)  
+end
+#μ_p is friction between the pole and the point its attached to
+#μ_c is the friction between the cart and road
+#l is the length of the pole
+#m is the mass of the pole while M is the mass of the cart
+#g is g
+
+dt = 0.02
+sc = 100 # scaling factor that determines how things render
 t = 0.0
 p_t = 0.0
 #####################################################################################
-∂f_u = (x_s) -> [0,1/(set.m*set.l^2)]
-#∂f_u = (x_s) -> [0,-(7/3)/(set.m * cos(mod_(x_s[3],-pi,-pi,2*pi))^2 - 7/3*set.M),0,0]
+if simple_pendulum
+    ∂f_u = (x_s) -> [0,1/(set.m*set.l^2)]
+else
+    ∂f_u = (x_s) -> [0,-(7/3)/(set.m * cos(cntl.mod_(x_s[3],-pi,-pi,2*pi))^2 - 7/3*set.M),0,0]
+end
+# -
 
-x_s = vcat(0,0)
+if simple_pendulum
+    x_s = vcat(0,0)
+else
+    x_s = vcat(0,0,0,0)
+end
 
 # +
 function runge_kutta(f,t,x,h;a,b,c)
@@ -61,7 +98,7 @@ n_kick = 0.0
 
 # +
 function updatephysics(x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t,g;do_presses=false,do_random=true)
-    global n_kick
+    global n_kick, simple_pendulum
     # compute the force
     f_ = 0  
     if do_random
@@ -94,11 +131,15 @@ function updatephysics(x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t,g;do_press
     # step the system
     
     #####################################################################################
-    ∂∂x = ∂∂x_p(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
-    ∂∂θ = ∂∂θ_p(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
-    
-    #∂∂x = ∂∂x_(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
-    #∂∂θ = ∂∂θ_(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
+    if simple_pendulum
+        # pendulum physics (p for pole/pendulum)
+        ∂∂x = ∂∂x_p(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
+        ∂∂θ = ∂∂θ_p(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
+    else
+        # cart pole physics
+        ∂∂x = ∂∂x_(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
+        ∂∂θ = ∂∂θ_(x,∂x,∂∂x,θ,∂θ,∂∂θ,f+f_;set...)
+    end
     
     ∂x = ∂x + dt * ∂∂x
     ∂θ = ∂θ + dt * ∂∂θ
@@ -125,22 +166,139 @@ end
 # # Visuals
 
 # +
+mutable struct my_text_actor 
+    font_name
+    font_size
+    font_color
+    font
+    actor
+    pos
+    text
+end
+
+function my_text_actor(text,pos,font_name,font_size,font_color)
+font = TTF_OpenFont(pwd()*"/fonts/"*font_name, font_size)
+    actor = TextActor(text,font_name;color=font_color)
+    
+    return  my_text_actor(font_name,font_size,font_color,font,actor,pos,text)
+end
+
+function modify_text_of_actor(text_actor,text)
+    sf = TTF_RenderText_Blended(text_actor.font, text , SDL_Color(text_actor.font_color...))
+    w,h = size(sf)
+    text_actor.actor.surface = sf
+    text_actor.actor.position = Rect(text_actor.pos[1],text_actor.pos[2],Int(w),Int(h))
+end
+
+function draw(text_actor::my_text_actor)
+    draw(text_actor.actor)
+end
+
+# +
+mutable struct my_image_actor
+    width
+    height
+    pos
+    dir_string
+    image_name
+    actor
+end
+
+function my_image_actor(image_name,size_,pos,scale_factor,dir_string)
+    plot([0,1])
+    width = size_[1]
+    height = size_[2]
+    plot!(size=(width,height))
+    savefig(dir_string*image_name)
+    
+    actor = Actor(image_name,pos=pos,scale = [scale_factor,scale_factor])
+
+    return my_image_actor(width,height,pos,dir_string,image_name,actor)
+end
+
+function draw_plot_to_image(image_actor)
+    plot!(size=(image_actor.width,image_actor.height))
+    path = image_actor.dir_string*image_actor.image_name
+    savefig(path)
+    image_actor.actor.surface = IMG_Load(path) 
+    #here we can directly put the image we want in
+end
+
+function draw(image_actor::my_image_actor)
+    draw(image_actor.actor)
+end
+
+# +
+### Set canvas size:
+WIDTH = 1200
+HEIGHT = 800
+
+### Set up custom objects to show plots:
+# needs these constants
+dir_string = "/home/../tmp/"
+
+# and here are the objects:
+image1 = my_image_actor("img_for_plot.png",(600,400),(WIDTH - 0.5*600,0),0.5,dir_string)
+
+# which will plot this data:
+all_ys_so_far = zeros(0)
+
+### Set up custom objects to show text:
+# needs these constants
 colors = range(colorant"black", colorant"white")
 
+font_name = "ubuntuth.ttf"
+font_size = 24
+font_color = Int[0,0,0,255]
+
+# and will plot this often:
+plot_every = 1000
+last_plot = 0
+
+# and here are the objects
+displaytime1 = my_text_actor("0",(WIDTH/20,HEIGHT/20),font_name,font_size,font_color)
+displaytime2 = my_text_actor("0",(WIDTH/20,2.5*HEIGHT/20),font_name,font_size,font_color)
+
+txtact_fast = TextActor(">>>>",font_name;color=font_color)
+txtact_fast.pos = (WIDTH/20,3.5*HEIGHT/20)
+txtact_play = TextActor(">",font_name;color=font_color)
+txtact_play.pos = txtact_fast.pos
+
+
+# +
 function draw(g::Game)
     global x,θ,f,set,f_,t,p_t,txtact_fast,txtact_play,t_arr,t_arr2,cum_r,mod,
-    δ,slow_end,prevtemp,prevtemp2,show,x_s,r,
+    δ,slow_end,prevtemp,prevtemp2,show,x_s,r,episode_length,
     #w_A,n_A,w_V,r,c,s,V,Vmax,Vmin,
     #∂b_x,b,
-    RLBrain_,RLParam_
+    RLBrain_,RLParam_,
+    image1,all_ys_so_far,last_plot,plot_every,
+    font,font_color
     
-    @unpack w_A,w_V,e,A,V,σ,n_A = RLBrain_;
-    @unpack c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,dt = RLParam_;
+    @unpack w_A,w_V,w_M,e,A,V,σ,n_A = RLBrain_;
+    @unpack c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,dt,init_brain,f_0,f_total = RLParam_;
     
     clear()
     
-    drawnumber(t,WIDTH/10,HEIGHT/10,t_arr)
-    drawnumber(mod,WIDTH/10,HEIGHT/10*1.5,t_arr2;digits=2)
+    ### Computations for drawing plots:
+
+    if t-last_plot > plot_every
+        plot(all_ys_so_far)
+        
+        draw_plot_to_image(image1)
+        
+        last_plot = t
+    end
+    
+    draw(image1)
+    
+    ### Computations for drawing text:
+    
+    modify_text_of_actor(displaytime1,  "Time: "*chop(  string(round(t,digits=0)) , tail = 2)  )
+    draw(displaytime1)
+    
+    modify_text_of_actor(displaytime2,  "Trial: "* chop(  string(round(t/episode_length,digits=0)) , tail = 2)  )
+    draw(displaytime2)
     
     if (t <= slow_end)||show
         draw(txtact_play)
@@ -149,6 +307,7 @@ function draw(g::Game)
         return
     end
     
+    ### Computations for drawing the cart and what not:
     cart_width = 40
     cart_height = 10
     l = set[1]
@@ -188,11 +347,15 @@ function draw(g::Game)
     dis_h_pos2 = 0 
     dis_w_pos = WIDTH/2-dis_h/2
     
+    if method == 3
+        (b,∂b_x,∂b_u) = cntl.b____(x_s,f;c,s) #how far are we from each basis vector
+    else
+        (b,∂b_x) = cntl.b____(x_s;c,s) #how far are we from each basis vector
+    end
     
-    (b,∂b_x) = cntl.b____(x_s;c,s) #how far are we from each basis vector
     shape_b = reshape(b,size(c)...)
 
-
+    # Draw bottom left block
     temp = slice_dir(shape_b,1,2)
     maxpos = findmax(temp)[1] 
     if maxpos != 0
@@ -203,7 +366,11 @@ function draw(g::Game)
     drawgrid(temp,dis_w_pos-2*dis_h,dis_h_pos,dis_h,dis_h)
 
 
-    if length(size(shape_b))>2
+    # Draw top left block
+    if length(size(shape_b))>2 && !(method==3) 
+                #size(shape_b)>2 indicates that we are using the cart as well which has
+                #4 co-ordinates. But this is only true if we didn't already put a third 
+                #co-oridinate by using method 3 for u
         temp = slice_dir(shape_b,3,4)
         maxpos = findmax(temp)[1] 
         if maxpos != 0
@@ -251,16 +418,16 @@ function draw(g::Game)
     
     res = 0
     if tick 
-        res = reshape(w_V,size(c)...)
-        res2 = reshape(w_A,size(c)...)
+        res_w_V = reshape(w_V,size(c)...)
+        res_w_A = reshape(w_A,size(c)...)
         #     tempval = ((z) -> sum(w_V.*z[1])).(res)
         #     tempderiv = ((z) -> sum(w_V.*z[2])[2]).(res)
     end
     
-    # draw value function
-    if length(size(shape_b))>2
+    # Draw top middle block
+    if length(size(shape_b))>2 && !(method==3)
         if tick
-            temp = slice_dir(res,3,4)
+            temp = slice_dir(res_w_V,3,4)
             maxpos = findmax(temp)[1]
             minpos = findmin(temp)[1]
             if maxpos-minpos != 0
@@ -272,8 +439,9 @@ function draw(g::Game)
     end
     
             
+    # Draw bottom middle block
     if tick
-        temp = slice_dir(res,1,2)
+        temp = slice_dir(res_w_V,1,2)
         maxpos = findmax(temp)[1]
         minpos = findmin(temp)[1]
         if maxpos-minpos != 0
@@ -283,8 +451,9 @@ function draw(g::Game)
     end
     drawgrid(prevtemp,dis_w_pos,dis_h_pos,dis_h,dis_h)
     
+    # Draw bottom right block
     if tick
-        temp = slice_dir(res2,1,2)
+        temp = slice_dir(res_w_A,1,2)
         maxpos = findmax(temp)[1]
         minpos = findmin(temp)[1]
         if maxpos-minpos != 0
@@ -319,15 +488,9 @@ end
 
 using Distributions
 
-# +
 # learning parameters
-WIDTH = 800
-HEIGHT = 400
 
-txtact_fast = TextActor(">>>>","ubuntuth.ttf";color=Int[0,0,0,255])
-txtact_fast.pos = (WIDTH/20,HEIGHT/20)
-txtact_play = TextActor(">","ubuntuth.ttf";color=Int[0,0,0,255])
-txtact_play.pos = (WIDTH/20,HEIGHT/20)
+
 
 # +
 function drawfire(x1,y1,mag,width;scale = 2.0,color=colorant"orange")
@@ -360,47 +523,48 @@ function drawfire(x1,y1,mag,width;scale = 2.0,color=colorant"orange")
 end
 
 # +
-f_arr = () -> [
-    TextActor("0","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("1","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("2","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("3","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("4","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("5","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("6","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("7","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("8","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("9","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor(".","ubuntuth.ttf";color=Int[0,0,0,255]),
-    TextActor("-","ubuntuth.ttf";color=Int[0,0,0,255])
-]
+# f_arr = () -> [
+#     TextActor("0","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("1","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("2","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("3","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("4","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("5","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("6","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("7","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("8","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("9","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor(".","ubuntuth.ttf";color=Int[0,0,0,255]),
+#     TextActor("-","ubuntuth.ttf";color=Int[0,0,0,255])
+# ]
 
-t_arr = repeat([f_arr()],20)
-t_arr2 = repeat([f_arr()],20)
-# -
+# t_arr = repeat([f_arr()],20)
+# t_arr2 = repeat([f_arr()],20)
 
-function drawnumber(t,WIDTH,HEIGHT,t_arr;digits=1)
-    t_ = round(t,digits=digits)
-    t_s = string(t_)
-    a = length(t_s)
+# +
+# function drawnumber(t,WIDTH,HEIGHT,t_arr;digits=1)
+#     t_ = round(t,digits=digits)
+#     t_s = string(t_)
+#     a = length(t_s)
     
-    i = 1
-    for s in reverse(t_s)
-        if s=='.'
-            temp = t_arr[i][11]
-        elseif s=='-'
-            temp = t_arr[i][12]
-        else
-            num = parse(Int64,s)
-            temp = t_arr[i][num+1]
-        end
+#     i = 1
+#     for s in reverse(t_s)
+#         if s=='.'
+#             temp = t_arr[i][11]
+#         elseif s=='-'
+#             temp = t_arr[i][12]
+#         else
+#             num = parse(Int64,s)
+#             temp = t_arr[i][num+1]
+#         end
         
-        temp.pos = (WIDTH+(a-i)*12,HEIGHT)
-        draw(temp)
-        i += 1
+#         temp.pos = (WIDTH+(a-i)*12,HEIGHT)
+#         draw(temp)
+#         i += 1
         
-    end
-end
+#     end
+# end
+# -
 
 function drawgrid(values,xpos,ypos,height,width;do_block=true)
     
@@ -432,12 +596,16 @@ end
 
 # +
 function update(g::Game)
-    global x,∂x,∂∂x,θ,∂θ,∂∂θ,set,t,dt,f,f_,era_count,era_length,episode_count,episode_length,quick_end,slow_end,episode_end,punish_length,punish_end,slow_episode_num,
+    global x,∂x,∂∂x,θ,∂θ,∂∂θ,set,t,dt,f,f_,era_count,era_length,episode_count,episode_length,
+    quick_end,slow_end,episode_end,punish_length,punish_end,slow_episode_num,
     punish,pun_r,cum_r,x_s,
     mod,b,∂b_x,show,RLBrain_,RLParam_,
     A,w_A,V,w_V,
     r,
-    n_A,τ,σ,c,s,η_A,η_V,e,σ_0,Vmax,Vmin,γ,λ,dt
+    n_A,τ,σ,c,s,η_A,η_V,e,σ_0,Vmax,Vmin,γ,λ,dt,init_brain,f_0,f_total,f,
+    simple_pendulum, method, Vmax, Vmin,
+    adjusted_max_reward_per_episode, adjusted_min_reward_per_episode,
+    all_ys_so_far
     
     while t < quick_end
         
@@ -454,8 +622,10 @@ function update(g::Game)
             
             punish = false
             
-            #mod = min(1,max(0,(cum_r - min_r)/(max_r-min_r)))
-            #σ = σ_0 * mod
+            mod = Main.ContinuousLearning.bound_output(
+                (adjusted_max_reward_per_episode - cum_r)/(adjusted_max_reward_per_episode-adjusted_min_reward_per_episode),
+                0,1)
+            #print(mod,"\n")
             cum_r = 0
         end
         
@@ -466,21 +636,36 @@ function update(g::Game)
             end
         end
         
-        # environment and its response RLView=(x_s,r)
         if !punish
-            x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t = updatephysics(x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t,g;do_presses=do_presses)
+            x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t = updatephysics(x,∂x,∂∂x,θ,∂θ,∂∂θ,f,set,dt,f_,t,g;do_presses=do_presses,do_random=false)
             r = cos(cntl.mod_(θ,-pi,-pi,2*pi))
+            append!(all_ys_so_far,r)
         else
             r = pun_r
         end
-        x_s = vcat(cntl.mod_(θ,-pi,-pi,2*pi),∂θ)
-        RLView_ = cntl.RLView(x_s,r)
+        prev_x_s = x_s[:]
+        
+        if simple_pendulum
+            x_s = vcat(cntl.mod_(θ,-pi,-pi,2*pi),∂θ)
+        else
+            x_s = vcat(x,∂x,cntl.mod_(θ,-pi,-pi,2*pi),∂θ)
+        end
+        
+        
+        # Store the information about the environment, current reward and current action in the correct format
+        RLView_ = cntl.RLView(x_s,r,f)
         
         
         # learning happens
-        f,RLBrain_ = cntl.updatelearningAC(RLView_,RLBrain_,RLParam_)
-        
-        
+        if method == 1
+            f,RLBrain_ = cntl.updatelearningAC(RLView_,RLBrain_,RLParam_)
+        elseif method == 2
+            f,RLBrain_ = cntl.updatelearningACknownIG(RLView_,RLBrain_,RLParam_,∂f_u,mod)
+        elseif method == 3
+            x_dot = (x_s - prev_x_s)/dt
+            f,RLBrain_ = cntl.updatelearningAClearnedIG(RLView_,RLBrain_,RLParam_,x_dot)
+        end
+        #f = 0
         
         if punish && (t >= punish_end)
             t = episode_end
@@ -507,6 +692,7 @@ function update(g::Game)
     era_count += 1
     quick_end = era_count*era_length + era_length
     slow_end =  era_count*era_length + slow_episode_num * episode_length
+    
 end
 
 #####################################################################################
@@ -526,42 +712,80 @@ episode_count = 0
 episode_end = episode_count*episode_length+episode_length
 slow_episode_num = 1
 
-era_length = 2000
+era_length = 2000#500#2000
 era_count = 0
-quick_end =  era_count*era_length + era_length
+quick_end =  era_count*era_length + era_length #0
 slow_end  =  era_count*era_length #+ slow_episode_num * episode_length
 
-pun_r = -1.0
-punish_length = 1
+pun_r = -3.0
+punish_length = 3
 punish = false
 punish_end = 0
 
 # +
-len = 13
-len2 = 9
+len = 15 # for θ and ∂θ
+len2 = 8 # for x and ∂x
+len3 = 2 # for u
 
 θ_range = range(-pi,pi,length=len)
-∂θ_range = range(-3*pi,3*pi,length=len)
-#x_range = range(-WIDTH/sc/1.5,WIDTH/sc/1.5,length=len2)
-#∂x_range = range(x_range[1]/1.5,x_range[end]/1.5,length=len2)
+#∂θ_range = range(-3*pi,3*pi,length=len)
+∂θ_range = range(-2.5*pi,2.5*pi,length=len) # they say to use this range for ∂θ
+if !simple_pendulum
+    x_range = range(-WIDTH/sc/1.5,WIDTH/sc/1.5,length=len2)
+    ∂x_range = range(x_range[1]/1.5,x_range[end]/1.5,length=len2)
+end
+
+if method == 3
+    u_range = range(-2,2,length=len3)
+end
 
 #####################################################################################
-#c = collect(Iterators.product(x_range,∂x_range,θ_range,∂θ_range));
-c = collect(Iterators.product(θ_range,∂θ_range));
+if simple_pendulum
+    if method == 3 
+        c = collect(Iterators.product(θ_range,∂θ_range,u_range));
+    else
+        c = collect(Iterators.product(θ_range,∂θ_range));
+    end
+else
+    if method == 3
+        c = collect(Iterators.product(x_range,∂x_range,θ_range,∂θ_range,u_range));
+    else
+        c = collect(Iterators.product(x_range,∂x_range,θ_range,∂θ_range));
+    end
+end
 c = ((x)->collect(x)).(c)
 
 # +
-#tempf = (f) -> (f*2.0)^(-1.0)
+#tempf = (f) -> (f*1.5)^(-1.0)
 tempf = (f) -> (f*1.1)^(-1.0)
 tempf2 = (f) -> (f*1.0)^(-1.0)
-#x_range_s  =  repeat([tempf2(  (x_range[end]-x_range[1])/len2)],len2)
-#∂x_range_s =  repeat([tempf2(  (∂x_range[end]-∂x_range[1])/len2)],len2 )
+
 θ_range_s  =  repeat([tempf(  (θ_range[end]-θ_range[1])/len)],len)
 ∂θ_range_s =  repeat([tempf(  (∂θ_range[end]-∂θ_range[1])/len)],len )
 
+if !simple_pendulum
+    x_range_s  =  repeat([tempf2(  (x_range[end]-x_range[1])/len2)],len2)
+    ∂x_range_s =  repeat([tempf2(  (∂x_range[end]-∂x_range[1])/len2)],len2 )
+end
+
+if method == 3
+    u_range_s = repeat([tempf(  (u_range[end]-u_range[1])/len3)],len3 )
+end
+
 #####################################################################################
-#s = collect(Iterators.product(x_range_s,∂x_range_s,θ_range_s,∂θ_range_s));
-s = collect(Iterators.product(θ_range_s,∂θ_range_s));
+if simple_pendulum
+    if method == 3
+        s = collect(Iterators.product(θ_range_s,∂θ_range_s,u_range_s));
+    else
+        s = collect(Iterators.product(θ_range_s,∂θ_range_s));
+    end
+else
+    if method == 3
+        s = collect(Iterators.product(x_range_s,∂x_range_s,θ_range_s,∂θ_range_s,u_range_s));
+    else
+        s = collect(Iterators.product(x_range_s,∂x_range_s,θ_range_s,∂θ_range_s));
+    end
+end
 s = ((x)->collect(x)).(s)
 # -
 
@@ -599,7 +823,8 @@ end
 initial_w_scale = 0.0
 w_A = (rand(length(c)).*initial_w_scale*2).-initial_w_scale
 A = 0.0
-η_A = 10.0
+#η_A = 5.0
+η_A = 0.1
 n_A = 0.0
 b = (w_A[:].*0)
 ∂b_x = repeat([[0,0]],length(w_A))
@@ -611,18 +836,25 @@ V = 0.0
 Vmax = +1.0
 Vmin = -0.0
 e = repeat([0.0],length(w_V))
-η_V = 5.0 
+η_V = 1.0 
 
 r = 0.0
 cum_r = -1.0 * episode_length/dt
-σ_0 = 2.0#0.5
-mod = min(1,max(0,(Vmax-V)/(Vmax-Vmin)))
+σ_0 = 0.5
+mod = Main.ContinuousLearning.bound_output((Vmax-V)/(Vmax-Vmin),0,1)
 σ = σ_0 * mod
 
 δ = 0
 f = 0.0
 
-τ = 2.0
+w_M = [Vector{Float64}(undef,2) for _ in 1:2]
+RLBrain_ = cntl.RLBrain(w_A,w_V,w_M,e,A,V,σ,n_A);
+f_0 = 5
+f_total = 1
+
+# +
+dt = 0.02
+τ = 1.0
 κ = τ/10
 
 if τ==dt
@@ -633,10 +865,18 @@ else
     γ=(1-dt/κ)/(1-dt/τ)
 end
 λ=(1-dt/τ);
+#(γ,λ) = (λ,γ)
+(γ,λ)
 # -
 
-RLBrain_ = cntl.RLBrain(w_A,w_V,e,A,V,σ,n_A);
-RLParam_ = cntl.RLParam(c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,dt);
+steps_per_episode = episode_length / dt
+absolute_max_reward_per_episode = steps_per_episode * Vmax #reward if it spent all its time in the best state
+absolute_min_reward_per_episode = steps_per_episode * Vmin #reward if it spent all its time in the worst state
+adjusted_max_reward_per_episode = absolute_max_reward_per_episode / 2
+adjusted_min_reward_per_episode = absolute_min_reward_per_episode / 2
+
+RLParam_ = cntl.RLParam(c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,dt,
+                        RLBrain_,f_0,f_total);
 
 # +
 # using Parameters

@@ -20,11 +20,12 @@ using Formatting
 using Printf
 using Measurements
 using LsqFit
+using Parameters
 #using Measures
 
 using InteractingLOBs
 
-using ContinuousLearning
+include("../../ContinuousLearning.jl/src/ContinuousLearning.jl")
 
 # +
 pm = Plots.PlotMeasures
@@ -166,6 +167,7 @@ end
 # ## Visualize LatOB resting state
 
 # +
+###### YOU NEED TO ACTUALLY CHANGE THE CODE IN source_function.jl TO GET THE LAT ORDER BOOK
 # Configuration Arguments
 num_paths = 1#50#30
 
@@ -502,7 +504,7 @@ p₀ = 1300.0  #this is the mid_price at t=0  238.75
 D = 0.5#0.5/8 # real diffusion constant e.g. D=1 (meters^2 / second), 1
 α = 0.0 # legacy, no longer used
 
-ν = 0.5 #removal rate
+ν = 5.0#0.5 #removal rate
 γ = 1.0 #fraction of derivative (1 is normal diffusion, less than 1 is D^{1-γ} derivative on the RHS) 
 #ν = 1.0#1.0#3.0 #removal rate
 #γ = 1.0 #fraction of derivative (1 is normal diffusion, less than 1 is D^{1-γ} derivative on the RHS)
@@ -551,13 +553,15 @@ lob_model_no_push = SLOB(num_paths, T, p₀, Δt, L, D, ν, α, γ,
 lob_model_push.SK_DP
 # -
 
-(Dat3,p_arr) = quick_plot([lob_model_push,lob_model_no_push],[],SimKickStartTime-1,12,
-    for_visual=(do_left=false,do_right=false))#,seed=seed)
+#(Dat3,p_arr) = quick_plot([lob_model_push,lob_model_no_push],[],SimKickStartTime-1,12,
+#    for_visual=(do_left=false,do_right=false))#,seed=seed)
+(Dat3,p_arr) = quick_plot([lob_model_push],[],SimKickStartTime-1,12,
+    for_visual=(do_left=false,do_right=false),seed=seed)
 plot!()
 Δt3 = Δt
 
 Dat = Dat3
-plt = plot_price_path(plot(),Dat, 250, 1, false; path_to_plot = 1,do_scatter=true)
+#plt = plot_price_path(plot(),Dat, 250, 1, false; path_to_plot = 1,do_scatter=true)
 
 # +
 frac = 0.2
@@ -577,12 +581,25 @@ my_x_ticks = ((v)->round(v,digits=2)).([xmin+0.01,(xmin+xmax)/2,xmax-0.02])
 plt = plot!(plt,subplot=2,mirror=true,xlab="",ylab="",xticks=my_x_ticks,ytick=my_y_ticks,frame=:box,
                 xlims=[xmin,xmax-0.01],ylims=[ymin,ymax])
 
+global glob_var = 0.7
+
 plt = draw_square_abs(plt,[xmin,ymin],[xmax,ymax])
 plt = arrow_from_abs_to_frac(plt,[xmin,ymax],[xb,1-(xb+frac)])
 plt = arrow_from_abs_to_frac(plt,[xmax,ymax],[xb+frac,1-(xb+frac)])
 # -
 
-show_path(Dat;kw_for_visual=(shift_back_approx=true,))
+show_path(Dat;kw_for_visual=(shift_back_approx=true,center=-1,do_left=false,do_right=false,x_axis_width=1),fps_target=5)
+
+show_path(Dat,num_steps=4,start_time=38.44;kw_for_visual=(shift_back_approx=true,center=-1,do_left=false,do_right=false,x_axis_width=1),fps_target=1)
+
+derivs = get_central_derivative(Dat)
+eps = 0.01
+plot(eps./(.-derivs[60:300]))
+
+len = 15
+p1 = plot(1:len,autocor(derivs)[1:len],seriestype=:sticks,lw=2,xlab="Lag",ylab="ACF",legend=false)
+p2 = plot(1:len,pacf(derivs, 1:len; method=:regression),seriestype=:sticks,lw=2,xlab="Lag",ylab="PACF",legend=false)
+plot(p1,p2,layout=(1,2))
 
 # +
 folder_name = string(picture_folder_name,"/","Singles")
@@ -1502,20 +1519,26 @@ lob_model_no_push = SLOB(num_paths, T, p₀, Δt, L, D, ν, α, γ,
 lob_model_push.SK_DP
 
 # +
-(Dat,p_arr) = quick_plot([lob_model_push],[],SimKickStartTime+1;
-    for_visual=(
-        x_axis_width=10,shift_back_approx=true,
-        do_left=false,do_right=false,annotate_pos=:topright,
-        kw_for_plot=(legend=:bottomleft,)
-        ))
-plot!()
+n = 3
+DatArr = Vector{Dict{Int64, Dict{Int64, DataPasser}}}(undef,n)
+for i in 1:n
+    (DatArr[i],p_arr) = quick_plot([lob_model_push],[],SimKickStartTime+1;
+        for_visual=(
+            x_axis_width=10,shift_back_approx=true,
+            do_left=false,do_right=false,annotate_pos=:topright,
+            kw_for_plot=(legend=:bottomleft,)
+            ))
+    plot!()
+end
 
 #savefig(plot!(),"/home/derickdiana/Desktop/MetaOrderVisual.png")
 # -
 
-plot(abs.(Dat[1][1].raw_price_paths[SimKickStartTime-5:SimKickStartTime+100]),xlabel="Time",ylabel="Price",label="Price")
-vline!([5+1],label="Start of meta order")
-vline!([10+5+1],label="End of meta order")
+for i in 1:n
+    plot(abs.(Dat[1][1].raw_price_paths[SimKickStartTime-5:SimKickStartTime+100]),xlabel="Time",ylabel="Price",label="Price")
+    vline!([5+1],label="Start of meta order")
+    vline!([10+5+1],label="End of meta order")
+end
 #savefig(plot!(),"/home/derickdiana/Desktop/PriceOverTime.png")
 
 # +
@@ -1529,6 +1552,8 @@ names = repeat([file_name],length(p_arr))
 save_figs(p_arr;folder_name=file_name,names=names,folder_path=folder_path,save_type="png",
             dpi=dpi_,plot_size=size_,scale_=1.0,notify=true,insert_numbers=true)
 # -
+
+
 
 # # STYLIZED FACTS
 
@@ -1615,7 +1640,7 @@ lob_model_2.SK_DP
 
 my_file_name = "SF_DD_3"
 (Dat3,) = obtain_data_list([lob_model_3]
-                            ;seeds=seeds,do_new=true,print_labels=[""],save_new=false,
+                            ;seeds=seeds,do_new=false,print_labels=[""],save_new=false,
                              folder_name=dat_folder_name,file_name=my_file_name,
                              folder_path=global_folder_path);
 
@@ -4814,34 +4839,58 @@ lob_model_push.SK_DP
 )
 plot!()
 
-# +
 lob = Dat[1][1].lob_densities[:,SimKickStartTime-1]
 l = length(lob)
-middle = floor(Int64,l/2) + 1
+middle_ = floor(Int64,l/2) + 1
 width = 25
-plot(lob[(middle-width):(middle+width)])
-vline!([width+1])
-hline!([0];color="black")
+x_points = (middle_-width):(middle_+width)
+plot(x_points,lob[x_points],label="")
+vline!([middle_],color="red",label="middle_")
+vline!([middle_+1],color="green",label="middle_+1")
+vline!([middle_-1],color="green",label="middle_-1")
+hline!([0];color="black",label="")
 
-sums = calculate_trapezium_area_many(lob,target_Δx,middle-6,middle)
+# +
+sums = calculate_trapezium_area_many(lob,target_Δx,middle_-6,middle_)
 sums
 
 tick_volumes = cumsum(sums).*target_Δx
+gradient = -(lob[middle_+1]-lob[middle_-1])/(2*target_Δx)
+
+
 # -
 
 mynorm = (V) -> V./exp(upper)
 mylog = (V) -> log.(mynorm(V).+1)
 mysqrt = (V) -> V.^(0.5)
 
-# ## Market order with different nu
+# ## Market order with different m_0
+
+# +
+T__ = 10 # what Donier calls T
+Q__ = exp(-1.0)*T__.*[1.0,0.5,0.25] #what Donier calls Q
+m_0__ = Q__./T__ #what Donier calls m_0
+
+D__ = D #what Donier calls D
+L__ = abs(gradient)#what Donier calls mathcal{L}
+
+J__ = D__ * L__
+
+norm = zeros(length(Q__))
+#get_market_order_distance(Dat[1],1,SimKickStartTime-1)
+for i in 1:length(Q__)
+    norm[i] = get_market_order_distance(lob,Dat[1][1].slob.x,target_Δx,Dat[1][1].raw_price_paths[SimKickStartTime-1],Q__[i])
+end
+
+print(norm)
 
 # +
 function get_set(volume,combined_slice)
-    ν = combined_slice[1]
-    return get_set_inner(volume,ν)
+    volume_input = combined_slice[1]
+    return get_set_inner(volume,volume_input)
 end
 
-function get_set_inner(volume,ν)
+function get_set_inner(volume,volume_input)
     L = 200
     M = 400
     target_Δx = L/M
@@ -4851,7 +4900,7 @@ function get_set_inner(volume,ν)
     
     (T,Δts,SimKickStartTime) = get_length_of_time_that_allows_kick(RealKickStartTime,300,Δt,seed)
 
-    myRLPusherPush   = RLPushTerm(SimKickStartTime, SimKickStartTime+10, -2, volume,  false, true)
+    myRLPusherPush   = RLPushTerm(SimKickStartTime, SimKickStartTime+T__, -2, volume_input,  false, true)
     myRLPusherNoPush = RLPushTerm(0.0, 0.0, 0.0, 0.0, false, true)
     
     lob_model_push    = SLOB(num_paths, T, p₀, Δt, L, D, ν, α, γ,
@@ -4872,25 +4921,34 @@ my_file_name = "PI_DN-MO"
 # looks kinda straight in that range
 upper = log(0.99 * λ/(2*μ)/2)
 
-volumes = exp(-1)#exp.(range(-8,upper,length=2000))
-steps = 1:100
-νs = [0.1,0.2,0.3]
+volumes = [1]#exp.(range(-8,upper,length=2000))
+steps = 1:50
 
 #all combinations of the above. Usually its own thing
-combined = collect(Iterators.product(νs))[:]
+combined = collect(Iterators.product(m_0__))[:]
+#combined = collect(Iterators.product(volumes))[:]
 
 (mean_price_impacts,var_price_impacts) = obtain_price_impacts((steps, volumes,  combined),  get_set; 
                                                         do_new = true, save_new = true, 
                                                         folder_name=dat_folder_name,file_name=my_file_name,folder_path=global_folder_path);
+# -
+for i in 1:length(m_0__)
+    mean_price_impacts[:,:,i] /= maximum(mean_price_impacts[:,:,i])
+    #mean_price_impacts[:,:,i] /= sqrt(D__*T__)  * Q__[i]
+end
+
 # +
-my_labels = map(ν_ -> string("Price impact with ν=",round(ν_[1];digits=2)),combined)
+my_labels = map(volume_input_ -> string(L"m_0/J=",round(volume_input_[1]/J__;digits=2)),combined)
+#my_labels = map(volume_ -> string("Price impact with m_0=",round(volume_;digits=2)),volumes)
 
 my_yticks = vcat(0,range(0.25,5,step=0.25))
-xticks_vals = mylog(2.0.*tick_volumes)
-my_xticks = (xticks_vals, ((ν)->round(ν,digits=2)).(xticks_vals))
+xticks_vals = 1:10
+#my_xticks = (xticks_vals, ((ν)->round(ν,digits=2)).(xticks_vals))
+my_xticks = xticks_vals
 
-fit_and_plot_price_change((steps,[1],my_labels),mean_price_impacts,var_price_impacts,kick_end_time=10,
-                            modify_input_p = (t)->log(t))
+fit_and_plot_price_change((steps,volumes,my_labels),mean_price_impacts,var_price_impacts,kick_end_time=10,
+                            modify_plot_t = (v) -> (v/T__),
+                            forplot=(xticks=my_xticks,legend=:bottomright))
 plot!()
 
 # +

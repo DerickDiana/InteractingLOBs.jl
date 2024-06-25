@@ -133,6 +133,10 @@ A = 0.0
 η_A = 10.0
 n_A = 0.0
 
+w_M = [Vector{Float64}(undef,5) for _ in 1:2]
+f_0 = 1
+f_total = 1
+
 # Critic
 initial_w_scale = 0.0
 w_V = (rand(length(c)).*initial_w_scale*2).-initial_w_scale
@@ -156,13 +160,14 @@ end
 
 σ_0 = 2.0
 
-init_brain = RLBrain(w_A,w_V,e,A,V,σ,n_A);
+init_brain = RLBrain(w_A,w_V,w_M,e,A,V,σ,n_A);
 
 final_brain = InteractingLOBs.ContinuousLearning.copy_brain(init_brain)
+Dat = 1
 # -
 
 for i in 1:1#200
-    RLParam_ = RLParam(c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,Δt,final_brain);
+    RLParam_ = RLParam(c,s,η_A,η_V,Vmax,Vmin,γ,λ,τ,σ_0,Δt,final_brain,f_0,f_total);
 
     (Dat,p_arr) = quick_plot([lob_model_push],[RLParam_],SimKickStartTime-1,12,
         for_visual=(do_left=false,do_right=false))#,seed=seed)

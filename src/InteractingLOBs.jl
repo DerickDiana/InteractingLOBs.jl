@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-__precompile__()
+# +
+#__precompile__()
+# -
 
 
 module InteractingLOBs
@@ -153,6 +155,7 @@ export  SLOB,
         calculate_intercept,
         calculate_trapezium_area,
         calculate_trapezium_area_many,
+        get_market_order_distance,
 
         my_pad, get_layout_for_n_plots,
 
